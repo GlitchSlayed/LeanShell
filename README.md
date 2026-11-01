@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/dock-to-launcher.gif" width="700" alt="The dock slides up, then grows into the launcher">
+  <img src="assets/dock-to-launcher.webp" width="700" alt="The dock slides up, then grows into the launcher">
 </p>
 
 Wisp hides the taskbar. A dock takes its place.

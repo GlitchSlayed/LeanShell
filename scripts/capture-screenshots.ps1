@@ -1,9 +1,10 @@
 # Captures the dock and the launcher over a bright test pattern into target\shots.
 # The 'reel' state records the hidden dock sliding in and growing into the
-# launcher as numbered frames in target\shots\reel.
+# launcher as numbered frames in target\shots\reel, in slow motion: divide
+# the times in times.txt by -Slowdown to play it at real speed.
 # Run from the repository root after:
 #   cargo build --release --example launcher_demo --features perf-trace
-param([string]$Prefix = 'shot', [string]$Demo = 'target\release\examples\launcher_demo.exe', [string]$Phase = 'now', [string[]]$Themes = @('dark','light'), [int[]]$Dpis = @(96,120), [string[]]$States = @('dock','launcher'), [ValidateSet('pattern','wallpaper')][string]$Backdrop = 'pattern', [string]$Query = '', [int]$WaitSeconds = 3)
+param([string]$Prefix = 'shot', [string]$Demo = 'target\release\examples\launcher_demo.exe', [string]$Phase = 'now', [string[]]$Themes = @('dark','light'), [int[]]$Dpis = @(96,120), [string[]]$States = @('dock','launcher'), [ValidateSet('pattern','wallpaper')][string]$Backdrop = 'pattern', [string]$Query = '', [int]$WaitSeconds = 3, [int]$Slowdown = 4)
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force 'target\shots' | Out-Null
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
@@ -75,16 +76,19 @@ try {
   if ($state.StartsWith('morph')) { $env:WISP_CAPTURE_MORPH=([int]$state.Substring(5)/100.0).ToString([Globalization.CultureInfo]::InvariantCulture) } else { Remove-Item Env:\WISP_CAPTURE_MORPH -ErrorAction SilentlyContinue }
   if ($state -eq 'reel') {
    Remove-Item Env:\WISP_CAPTURE_QUERY -ErrorAction SilentlyContinue
-   $env:WISP_CAPTURE_SCENARIO='reel'; $env:WISP_CAPTURE_DURATION_MS='10000'
+   $env:WISP_CAPTURE_SCENARIO='reel'; $env:WISP_CAPTURE_SLOWDOWN="$Slowdown"
+   # 4 s for the app icons to load, then 81 steps of 50 ms, slowed down.
+   $reel=81*50*$Slowdown
+   $env:WISP_CAPTURE_DURATION_MS="$(4000+$reel+1500)"
    $dir=Join-Path $PWD "target\shots\reel"
    Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
    $p=Start-Process $Demo -ArgumentList '--capture' -PassThru -WindowStyle Hidden -RedirectStandardError (Join-Path $PWD "target\shots\$Prefix-reel.log")
-   $width=1100; $height=420
+   $width=[int](1100*$dpi/120); $height=[int](420*$dpi/120)
    # The demo starts the sequence after 4 s, once the app icons have loaded.
    Start-Sleep -Milliseconds 3700
-   $count=[ReelRecorder]::Record($screen.Left+($screen.Width-$width)/2, $screen.Bottom-$height, $width, $height, 6500, 40, $dir)
+   $count=[ReelRecorder]::Record($screen.Left+($screen.Width-$width)/2, $screen.Bottom-$height, $width, $height, $reel+2000, 40, $dir)
    $p.WaitForExit()
-   Remove-Item Env:\WISP_CAPTURE_SCENARIO,Env:\WISP_CAPTURE_DURATION_MS -ErrorAction SilentlyContinue
+   Remove-Item Env:\WISP_CAPTURE_SCENARIO,Env:\WISP_CAPTURE_SLOWDOWN,Env:\WISP_CAPTURE_DURATION_MS -ErrorAction SilentlyContinue
    Write-Output "$dir ($count frames)"
    continue
   }

@@ -311,7 +311,8 @@ pub fn run() -> Result<()> {
                     }
                 }
                 if crate::util::perf::hook("WISP_CAPTURE_SCENARIO").as_deref() == Some("reel") {
-                    SetTimer(Some(l.hwnd), REEL_TIMER, REEL_MS, None);
+                    // The app icons load during the first 4 s.
+                    SetTimer(Some(l.hwnd), REEL_TIMER, 4000, None);
                 } else if crate::util::perf::hook_on("WISP_CAPTURE_SCENARIO") {
                     SetTimer(Some(l.hwnd), 98, 45, None);
                 }
@@ -989,6 +990,7 @@ impl Launcher {
             return value.clamp(0.0, 1.0);
         }
         (morph.start.elapsed().as_secs_f32() * 1000.0
+            / crate::util::perf::slowdown()
             / if morph.opening {
                 crate::morph::OPEN_MS
             } else {
@@ -2167,25 +2169,31 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     s.set(s.get() + 1);
                     s.get()
                 });
+                if step == 1 {
+                    let interval = (REEL_MS as f32 * crate::util::perf::slowdown()) as u32;
+                    unsafe {
+                        SetTimer(Some(l.hwnd), REEL_TIMER, interval, None);
+                    }
+                }
                 // Steps of REEL_MS: the hidden dock slides in, grows into the
                 // launcher, takes a query, then shrinks back into the dock.
                 match step {
-                    80 => {
+                    1 => {
                         if let Some(dock) = &mut l.dock {
                             dock.capture_reveal();
                         }
                     }
-                    98 => l.show(),
+                    19 => l.show(),
                     // The whole query at once: partial queries can list
                     // apps by their paths on this PC.
-                    108 => {
+                    29 => {
                         for unit in b"note" {
                             l.on_char((*unit).into());
                         }
                         l.paint();
                     }
-                    135 => l.hide(),
-                    160 => unsafe {
+                    56 => l.hide(),
+                    81 => unsafe {
                         let _ = DestroyWindow(hwnd);
                     },
                     _ => {}

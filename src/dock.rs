@@ -747,7 +747,7 @@ impl State {
         logic::slide_value(
             self.slide_from,
             self.slide_to,
-            start.elapsed().as_secs_f32() * 1000.0 / SLIDE_MS,
+            start.elapsed().as_secs_f32() * 1000.0 / crate::util::perf::slowdown() / SLIDE_MS,
         )
     }
 
@@ -797,7 +797,7 @@ impl State {
             self.publish_rects();
             if self
                 .slide
-                .is_some_and(|start| start.elapsed().as_secs_f32() * 1000.0 >= SLIDE_MS)
+                .is_some_and(|start| start.elapsed().as_secs_f32() * 1000.0 / crate::util::perf::slowdown() >= SLIDE_MS)
             {
                 self.slide = None;
                 let _ = KillTimer(Some(self.hwnd), SLIDE_TIMER);
@@ -825,10 +825,9 @@ impl State {
 
     fn step_hover(&mut self) {
         let now = Instant::now();
-        let step = self
-            .hover_tick
-            .replace(now)
-            .map_or(1.0, |last| now.duration_since(last).as_secs_f32() * 1000.0 / HOVER_MS);
+        let step = self.hover_tick.replace(now).map_or(1.0, |last| {
+            now.duration_since(last).as_secs_f32() * 1000.0 / crate::util::perf::slowdown() / HOVER_MS
+        });
         self.hover_levels.resize(self.items.len() + 1, 0.0);
         let mut moving = false;
         for (index, level) in self.hover_levels.iter_mut().enumerate() {

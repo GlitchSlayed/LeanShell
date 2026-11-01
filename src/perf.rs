@@ -79,6 +79,13 @@ mod enabled {
     pub fn hook_on(name: &str) -> bool {
         std::env::var_os(name).is_some()
     }
+    /// How many times slower animations run, for smooth screen recordings.
+    pub fn slowdown() -> f32 {
+        hook("WISP_CAPTURE_SLOWDOWN")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1.0f32)
+            .max(1.0)
+    }
     pub fn present() {
         let now = ticks();
         TRACE.with(|t| {
@@ -121,6 +128,10 @@ mod disabled {
     #[inline(always)]
     pub fn hook_on(_: &str) -> bool {
         false
+    }
+    #[inline(always)]
+    pub fn slowdown() -> f32 {
+        1.0
     }
 }
 #[cfg(not(feature = "perf-trace"))]
