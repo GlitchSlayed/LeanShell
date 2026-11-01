@@ -277,6 +277,9 @@ mod tests {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir(&dir).unwrap();
+        // The shell reports long paths; %TEMP% can hold an 8.3 name such as RUNNER~1.
+        let dir = std::fs::canonicalize(&dir).unwrap();
+        let dir = std::path::PathBuf::from(dir.to_str().unwrap().trim_start_matches(r"\\?\"));
         let file = dir.join("invoice \u{8cc7}\u{6599}.txt");
         std::fs::write(&file, "invoice").unwrap();
         let shortcut = dir.join("App.lnk");
