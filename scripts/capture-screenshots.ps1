@@ -1,13 +1,39 @@
 # Captures the dock and the launcher over a bright test pattern into target\shots.
+# The 'reel' state records the hidden dock sliding in and growing into the
+# launcher as numbered frames in target\shots\reel.
 # Run from the repository root after:
 #   cargo build --release --example launcher_demo --features perf-trace
-param([string]$Prefix = 'shot', [string]$Demo = 'target\release\examples\launcher_demo.exe', [string]$Phase = 'now', [string[]]$Themes = @('dark','light'), [int[]]$Dpis = @(96,120), [string[]]$States = @('dock','launcher'), [ValidateSet('pattern','wallpaper')][string]$Backdrop = 'pattern')
+param([string]$Prefix = 'shot', [string]$Demo = 'target\release\examples\launcher_demo.exe', [string]$Phase = 'now', [string[]]$Themes = @('dark','light'), [int[]]$Dpis = @(96,120), [string[]]$States = @('dock','launcher'), [ValidateSet('pattern','wallpaper')][string]$Backdrop = 'pattern', [string]$Query = '', [int]$WaitSeconds = 3)
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force 'target\shots' | Out-Null
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
-Add-Type -ReferencedAssemblies System.Windows.Forms @'
+Add-Type -ReferencedAssemblies System.Windows.Forms,System.Drawing @'
 using System;
 using System.Windows.Forms;
+public static class ReelRecorder {
+ public static int Record(int x, int y, int w, int h, int ms, int interval, string dir) {
+  var frames = new System.Collections.Generic.List<System.Drawing.Bitmap>();
+  var times = new System.Collections.Generic.List<long>();
+  var clock = System.Diagnostics.Stopwatch.StartNew();
+  while (clock.ElapsedMilliseconds < ms) {
+   long start = clock.ElapsedMilliseconds;
+   var b = new System.Drawing.Bitmap(w, h);
+   using (var g = System.Drawing.Graphics.FromImage(b)) { g.CopyFromScreen(x, y, 0, 0, b.Size); }
+   frames.Add(b); times.Add(start);
+   long wait = interval - (clock.ElapsedMilliseconds - start);
+   if (wait > 0) System.Threading.Thread.Sleep((int)wait);
+  }
+  System.IO.Directory.CreateDirectory(dir);
+  var log = new System.Text.StringBuilder();
+  for (int i = 0; i < frames.Count; i++) {
+   frames[i].Save(System.IO.Path.Combine(dir, i.ToString("D4") + ".png"), System.Drawing.Imaging.ImageFormat.Png);
+   frames[i].Dispose();
+   log.AppendLine(times[i].ToString());
+  }
+  System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "times.txt"), log.ToString());
+  return frames.Count;
+ }
+}
 public class CaptureBackdrop : Form {
  protected override bool ShowWithoutActivation { get { return true; } }
  protected override CreateParams CreateParams { get { var p=base.CreateParams; p.ExStyle |= 0x08000000; return p; } }
@@ -45,11 +71,27 @@ try {
   $env:APPDATA=Join-Path $PWD 'target\capture-data'
   New-Item -ItemType Directory -Force "$env:APPDATA\wisp-demo" | Out-Null
   "theme = `"$theme`"`nposition = `"bottom`"`ndock = true`nhide_taskbar = false`nfile_search = false" | Set-Content "$env:APPDATA\wisp-demo\config.toml"
-  $env:WISP_CAPTURE='1'; $env:DOCK_DEMO_DPI="$dpi"; $env:WISP_CAPTURE_QUERY=if($state -eq 'results8') {'e'} elseif($state -eq 'results1') {'zzzzzzzz'} else {'time'}; $env:WISP_FRAME_TIMING='1'; $env:WISP_CAPTURE_ROWS=if($state.StartsWith('results')) {$state.Substring(7)} else {'3'}
+  $env:WISP_CAPTURE='1'; $env:DOCK_DEMO_DPI="$dpi"; $env:WISP_CAPTURE_QUERY=if($Query) {$Query} elseif($state -eq 'results8') {'e'} elseif($state -eq 'results1') {'zzzzzzzz'} else {'time'}; $env:WISP_FRAME_TIMING='1'; $env:WISP_CAPTURE_ROWS=if($state.StartsWith('results')) {$state.Substring(7)} else {'3'}
   if ($state.StartsWith('morph')) { $env:WISP_CAPTURE_MORPH=([int]$state.Substring(5)/100.0).ToString([Globalization.CultureInfo]::InvariantCulture) } else { Remove-Item Env:\WISP_CAPTURE_MORPH -ErrorAction SilentlyContinue }
+  if ($state -eq 'reel') {
+   Remove-Item Env:\WISP_CAPTURE_QUERY -ErrorAction SilentlyContinue
+   $env:WISP_CAPTURE_SCENARIO='reel'; $env:WISP_CAPTURE_DURATION_MS='10000'
+   $dir=Join-Path $PWD "target\shots\reel"
+   Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+   $p=Start-Process $Demo -ArgumentList '--capture' -PassThru -WindowStyle Hidden -RedirectStandardError (Join-Path $PWD "target\shots\$Prefix-reel.log")
+   $width=1100; $height=420
+   # The demo starts the sequence after 4 s, once the app icons have loaded.
+   Start-Sleep -Milliseconds 3700
+   $count=[ReelRecorder]::Record($screen.Left+($screen.Width-$width)/2, $screen.Bottom-$height, $width, $height, 6500, 40, $dir)
+   $p.WaitForExit()
+   Remove-Item Env:\WISP_CAPTURE_SCENARIO,Env:\WISP_CAPTURE_DURATION_MS -ErrorAction SilentlyContinue
+   Write-Output "$dir ($count frames)"
+   continue
+  }
   $arg = if($state.StartsWith('results') -or $state -eq 'launcher' -or $state.StartsWith('morph')) { '--show' } else { '--capture' }
+  $env:WISP_CAPTURE_DURATION_MS="$($WaitSeconds * 1000 + 1500)"
   $p=Start-Process $Demo -ArgumentList $arg -PassThru -WindowStyle Hidden -RedirectStandardError (Join-Path $PWD "target\shots\$Prefix-$Phase-$state-$theme-$dpi.log")
-  $until=[DateTime]::UtcNow.AddSeconds(3)
+  $until=[DateTime]::UtcNow.AddSeconds($WaitSeconds)
   while([DateTime]::UtcNow -lt $until) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 30 }
   $bmp=New-Object Drawing.Bitmap($screen.Width,700)
   $g=[Drawing.Graphics]::FromImage($bmp)
@@ -59,6 +101,6 @@ try {
   $p.WaitForExit()
   Write-Output $path
  } } }
-} finally { $env:APPDATA=$originalAppData; $form.Close(); $form.Dispose(); Remove-Item Env:\WISP_CAPTURE,Env:\WISP_CAPTURE_QUERY,Env:\DOCK_DEMO_DPI,Env:\WISP_CAPTURE_MORPH,Env:\WISP_CAPTURE_ROWS,Env:\WISP_FRAME_TIMING -ErrorAction SilentlyContinue }
+} finally { $env:APPDATA=$originalAppData; $form.Close(); $form.Dispose(); Remove-Item Env:\WISP_CAPTURE,Env:\WISP_CAPTURE_SCENARIO,Env:\WISP_CAPTURE_DURATION_MS,Env:\WISP_CAPTURE_QUERY,Env:\DOCK_DEMO_DPI,Env:\WISP_CAPTURE_MORPH,Env:\WISP_CAPTURE_ROWS,Env:\WISP_FRAME_TIMING -ErrorAction SilentlyContinue }
 
 

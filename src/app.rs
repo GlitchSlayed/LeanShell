@@ -39,6 +39,9 @@ const WM_APP_SHOW: u32 = WM_APP + 3;
 const WM_APP_QUIT: u32 = WM_APP + 4;
 /// wisp-settings posts this message after it changes the config.
 const WM_APP_RELOAD: u32 = WM_APP + 6;
+/// Drives the scripted capture of the dock and the launcher.
+const REEL_TIMER: usize = 96;
+const REEL_MS: u32 = 50;
 const WM_APP_COMMANDS: u32 = WM_APP + 7;
 const CLASS_NAME: PCWSTR = crate::channel::LAUNCHER_CLASS;
 const HOTKEY_ID: i32 = 1;
@@ -273,8 +276,10 @@ pub fn run() -> Result<()> {
         with_launcher(|l| {
             l.start();
             if crate::util::perf::hook_on("WISP_CAPTURE") {
-                if crate::util::perf::hook("WISP_CAPTURE_SCENARIO").as_deref() != Some("hidden")
-                    && let Some(dock) = &mut l.dock
+                if !matches!(
+                    crate::util::perf::hook("WISP_CAPTURE_SCENARIO").as_deref(),
+                    Some("hidden" | "reel")
+                ) && let Some(dock) = &mut l.dock
                 {
                     dock.hold(
                         None,
@@ -305,7 +310,9 @@ pub fn run() -> Result<()> {
                         SetTimer(Some(l.hwnd), 97, 250, None);
                     }
                 }
-                if crate::util::perf::hook_on("WISP_CAPTURE_SCENARIO") {
+                if crate::util::perf::hook("WISP_CAPTURE_SCENARIO").as_deref() == Some("reel") {
+                    SetTimer(Some(l.hwnd), REEL_TIMER, REEL_MS, None);
+                } else if crate::util::perf::hook_on("WISP_CAPTURE_SCENARIO") {
                     SetTimer(Some(l.hwnd), 98, 45, None);
                 }
             }
@@ -2150,6 +2157,38 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         l.morph.is_some(),
                         unsafe { IsWindowVisible(l.hwnd).as_bool() }
                     );
+                }
+            });
+        }
+        WM_TIMER if wparam.0 == REEL_TIMER && crate::util::perf::hook_on("WISP_CAPTURE") => {
+            with_launcher(|l| {
+                thread_local! { static STEP: Cell<u32> = const { Cell::new(0) }; }
+                let step = STEP.with(|s| {
+                    s.set(s.get() + 1);
+                    s.get()
+                });
+                // Steps of REEL_MS: the hidden dock slides in, grows into the
+                // launcher, takes a query, then shrinks back into the dock.
+                match step {
+                    80 => {
+                        if let Some(dock) = &mut l.dock {
+                            dock.capture_reveal();
+                        }
+                    }
+                    98 => l.show(),
+                    // The whole query at once: partial queries can list
+                    // apps by their paths on this PC.
+                    108 => {
+                        for unit in b"note" {
+                            l.on_char((*unit).into());
+                        }
+                        l.paint();
+                    }
+                    135 => l.hide(),
+                    160 => unsafe {
+                        let _ = DestroyWindow(hwnd);
+                    },
+                    _ => {}
                 }
             });
         }

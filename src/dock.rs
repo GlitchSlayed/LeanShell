@@ -338,6 +338,13 @@ impl Dock {
         self.state.borrow_mut().frame_paced = true;
     }
 
+    /// Slides the dock in as the pointer would, and keeps it in, for captures.
+    pub fn capture_reveal(&mut self) {
+        let mut s = self.state.borrow_mut();
+        s.held = true;
+        s.reveal();
+    }
+
     pub fn capture_slide(&mut self) {
         let mut s = self.state.borrow_mut();
         let to = if s.slide_to > 0.5 { 0.0 } else { 1.0 };
