@@ -9,18 +9,20 @@ use std::time::{Duration, Instant, SystemTime};
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Ole::DROPEFFECT_NONE;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
+use windows::Win32::UI::Shell::SHDoDragDrop;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use crate::commands::{self, Command, Commands};
 use crate::config::{Config, Position, Theme};
 use crate::dock::{self, Dock};
+use crate::drag::{self, Payload};
 use crate::files::{FileResults, FileSearch};
 use crate::history::History;
 use crate::indexer::{AppEntry, IconPixels, IndexEvent, Indexer};
@@ -71,6 +73,7 @@ const DEFER_COMMANDS: u8 = 8;
 thread_local! {
     static LAUNCHER: RefCell<Option<Launcher>> = const { RefCell::new(None) };
     static DEFERRED: Cell<u8> = const { Cell::new(0) };
+    static DRAGGING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Returns `None` if the launcher is already borrowed. Windows can send
@@ -131,7 +134,7 @@ pub fn run() -> Result<()> {
 
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+        let _ole = drag::Ole::new()?;
 
         // The mutex limits Wisp to one running instance.
         let _mutex = CreateMutexW(None, true, crate::channel::INSTANCE_MUTEX)?;
@@ -247,6 +250,8 @@ pub fn run() -> Result<()> {
             scroll: 0,
             caret_visible: true,
             last_mouse: None,
+            drag_press: None,
+            drag_consumed: false,
             apps: Vec::new(),
             icons: HashMap::new(),
             history: History::load(),
@@ -405,6 +410,8 @@ struct Launcher {
     scroll: usize,
     caret_visible: bool,
     last_mouse: Option<(i32, i32)>,
+    drag_press: Option<((i32, i32), Payload)>,
+    drag_consumed: bool,
 
     apps: Vec<AppEntry>,
     icons: HashMap<String, Arc<IconPixels>>,
@@ -749,6 +756,7 @@ impl Launcher {
     }
 
     fn hide(&mut self) {
+        self.drag_press = None;
         if !self.visible {
             return;
         }
@@ -2063,7 +2071,59 @@ fn mouse_pos(lparam: LPARAM) -> (i32, i32) {
     )
 }
 
+// Run OLE without borrowing the launcher: its modal loop dispatches window messages.
+fn run_drag(hwnd: HWND, payload: Payload) {
+    unsafe {
+        let _ = ReleaseCapture();
+    }
+    let Ok(data) = payload.data_object() else {
+        return;
+    };
+    let _ = payload.set_image(&data);
+    DRAGGING.with(|d| d.set(true));
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+    }
+    let effect = unsafe { SHDoDragDrop(Some(hwnd), &data, None, payload.effect()) };
+    // Restore the same query on cancellation. A completed drop uses the normal
+    // hide path, including the return morph into the dock.
+    with_launcher(|l| {
+        if effect.is_ok_and(|effect| effect != DROPEFFECT_NONE) {
+            l.hide();
+        }
+        if l.visible || l.morph.is_some() {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                if l.visible {
+                    let _ = SetForegroundWindow(hwnd);
+                    let _ = SetFocus(Some(hwnd));
+                }
+            }
+            l.invalidate();
+        }
+    });
+    DRAGGING.with(|d| d.set(false));
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if DRAGGING.with(Cell::get)
+        && matches!(
+            msg,
+            WM_ACTIVATE
+                | WM_HOTKEY
+                | WM_APP_SHOW
+                | WM_KEYDOWN
+                | WM_SYSKEYDOWN
+                | WM_CHAR
+                | WM_MOUSEMOVE
+                | WM_LBUTTONDOWN
+                | WM_LBUTTONUP
+                | WM_RBUTTONUP
+                | WM_MOUSEWHEEL
+        )
+    {
+        return LRESULT(0);
+    }
     let dock_message = with_launcher(|l| {
         l.unified()
             && (Dock::owns_message(msg, wparam)
@@ -2075,6 +2135,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             | WM_MOUSEMOVE
                             | WM_MOUSELEAVE
                             | WM_MOUSEACTIVATE
+                            | WM_LBUTTONDOWN
                             | WM_LBUTTONUP
                             | WM_MBUTTONUP
                             | WM_RBUTTONUP
@@ -2237,18 +2298,72 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         // Suppress the Windows beep for Alt shortcuts handled by the launcher.
         WM_SYSCHAR => return LRESULT(0),
+        WM_LBUTTONDOWN => {
+            let point = mouse_pos(lparam);
+            with_launcher(|l| {
+                l.drag_consumed = false;
+                l.drag_press = if l.visible && l.surface.is_none() && l.morph.is_none() {
+                    l.row_at(point.1)
+                        .and_then(|row| l.results.get(row))
+                        .and_then(Payload::from_result)
+                        .map(|payload| (point, payload))
+                } else {
+                    None
+                };
+                if l.drag_press.is_some() {
+                    unsafe {
+                        SetCapture(hwnd);
+                    }
+                }
+            });
+        }
+        WM_CAPTURECHANGED => {
+            with_launcher(|l| l.drag_press = None);
+        }
         WM_MOUSEMOVE => {
             let (x, y) = mouse_pos(lparam);
-            with_launcher(|l| {
+            let payload = with_launcher(|l| {
+                if wparam.0 & 1 == 0 {
+                    l.drag_press = None;
+                } else if let Some((start, _)) = l.drag_press.as_ref() {
+                    let size = unsafe {
+                        (
+                            GetSystemMetricsForDpi(SM_CXDRAG, l.dpi),
+                            GetSystemMetricsForDpi(SM_CYDRAG, l.dpi),
+                        )
+                    };
+                    if drag::crossed_threshold(*start, (x, y), size) {
+                        l.drag_consumed = true;
+                        return l.drag_press.take().map(|(_, payload)| payload);
+                    }
+                }
                 let (x, y) = l.content_point(x, y);
                 l.on_mouse_move(x, y);
-            });
+                None
+            })
+            .flatten();
+            if let Some(payload) = payload {
+                run_drag(hwnd, payload);
+                return LRESULT(0);
+            }
         }
         WM_LBUTTONUP => {
             let (x, y) = mouse_pos(lparam);
             with_launcher(|l| {
-                let (x, y) = l.content_point(x, y);
-                l.on_click(x, y);
+                let consumed = std::mem::take(&mut l.drag_consumed);
+                let captured = l.drag_press.take().is_some();
+                if captured {
+                    unsafe {
+                        let _ = ReleaseCapture();
+                    }
+                }
+                let mut rect = RECT::default();
+                let inside = !captured
+                    || unsafe { GetClientRect(hwnd, &mut rect).is_ok() && PtInRect(&rect, POINT { x, y }).as_bool() };
+                if !consumed && inside {
+                    let (x, y) = l.content_point(x, y);
+                    l.on_click(x, y);
+                }
             });
         }
         WM_MOUSEWHEEL => {

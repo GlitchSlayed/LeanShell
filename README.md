@@ -73,6 +73,17 @@ Recent apps rank higher. They show when the box is empty.
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> | Copy the path |
 | <kbd>Esc</kbd> | Close |
 
+## Drag and drop
+
+Drag a result out of the launcher. No need to open File Explorer.
+
+- **Files and folders:** drop into a chat, an email, an upload box or a folder. The original stays put.
+- **Apps:** drop on the desktop or in a folder to make a shortcut.
+- **Text:** drop a calculator result, the time, the date or a path into any text box.
+- **Links:** drop a URL or web search into a browser or a chat.
+
+The launcher steps aside while you drag. Press <kbd>Esc</kbd> to cancel.
+
 ## Speed
 
 Wisp 0.2.0 against PowerToys Run 0.94 on the same PC. Median of 30 runs.

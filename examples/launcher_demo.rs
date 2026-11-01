@@ -9,6 +9,8 @@ mod commands;
 mod config;
 #[path = "../src/dock.rs"]
 mod dock;
+#[path = "../src/drag.rs"]
+mod drag;
 #[path = "../src/editor.rs"]
 mod editor;
 #[path = "../src/files.rs"]

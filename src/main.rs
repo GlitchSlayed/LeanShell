@@ -7,6 +7,7 @@ mod channel;
 mod commands;
 mod config;
 mod dock;
+mod drag;
 mod editor;
 mod files;
 mod history;
