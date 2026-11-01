@@ -1,0 +1,15 @@
+title = "Sound"
+description = "Volume, output device and each app's volume"
+keywords = ["sound", "audio", "mixer", "volume mixer", "app volume"]
+
+[[part]]
+kind = "volume"
+
+[[part]]
+kind = "outputs"
+
+[[part]]
+kind = "apps"
+
+[[part]]
+kind = "media"

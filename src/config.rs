@@ -26,13 +26,25 @@ pub enum Backdrop {
     Solid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Position {
+    #[serde(alias = "top")]
+    Center,
+    /// The query box sits at the bottom of the screen, where the dock is.
+    Bottom,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub hide_taskbar: bool,
+    pub dock: bool,
     pub hotkey: String,
     pub max_results: usize,
     pub theme: Theme,
     pub backdrop: Backdrop,
+    pub position: Position,
     pub show_recent: bool,
     pub search_url: String,
     pub file_search: bool,
@@ -42,10 +54,13 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            hide_taskbar: false,
+            dock: false,
             hotkey: "Alt+Space".into(),
             max_results: 8,
             theme: Theme::System,
             backdrop: Backdrop::Acrylic,
+            position: Position::Center,
             show_recent: true,
             search_url: "https://www.google.com/search?q={query}".into(),
             file_search: true,
@@ -100,5 +115,14 @@ impl Config {
             }
             Err(e) => (Config::default(), Some(format!("config.toml: {}", e.message()))),
         }
+    }
+}
+
+#[cfg(test)]
+mod dock_compat_tests {
+    #[test]
+    fn legacy_pins_are_ignored() {
+        let config: super::Config = toml::from_str("dock = true\ndock_apps = ['old.app']").unwrap();
+        assert!(config.dock);
     }
 }

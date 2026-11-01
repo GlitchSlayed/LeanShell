@@ -3,22 +3,31 @@
 
 mod app;
 mod calc;
+mod channel;
 mod commands;
 mod config;
+mod dock;
 mod editor;
 mod files;
 mod history;
 mod hotkey;
 mod indexer;
 mod launch;
+mod morph;
 mod render;
 mod search;
+mod surface;
 mod system;
+mod taskbar;
 mod theme;
 mod tray;
+mod tray_host;
 mod util;
 
 fn main() {
+    if taskbar::dispatch_watchdog() {
+        return;
+    }
     if let Err(e) = app::run() {
         util::error_box(&format!("Wisp could not start:\n{}", e.message()));
     }

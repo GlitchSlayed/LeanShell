@@ -11,10 +11,12 @@ use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows::core::{Interface, PCWSTR, Result, w};
-use windows_numerics::Vector2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::indexer::IconPixels;
 use crate::search::{Kind, ResultItem};
+use crate::surface::nav::{self, Rect};
+use crate::surface::{Input, Widget};
 use crate::theme::Palette;
 use crate::util::wide;
 
@@ -31,6 +33,67 @@ pub mod layout {
             INPUT_H
         } else {
             LIST_TOP + rows as f32 * ROW_H + LIST_PAD
+        }
+    }
+
+    /// Where the query box starts in a window `window_h` DIPs tall. At the
+    /// bottom of the screen the box is the window's last row.
+    pub fn input_top(window_h: f32, bottom: bool) -> f32 {
+        if bottom { window_h - INPUT_H } else { 0.0 }
+    }
+
+    /// The top of visible row `row`. At the bottom of the screen, results
+    /// stack upward so the best match sits next to the query box.
+    pub fn row_top(row: usize, window_h: f32, bottom: bool) -> f32 {
+        if bottom {
+            window_h - LIST_TOP - (row + 1) as f32 * ROW_H
+        } else {
+            LIST_TOP + row as f32 * ROW_H
+        }
+    }
+
+    /// The visible row at window DIP `y`, if any of `rows` rows is there.
+    pub fn row_at(y: f32, rows: usize, window_h: f32, bottom: bool) -> Option<usize> {
+        let offset = if bottom { window_h - LIST_TOP - y } else { y - LIST_TOP };
+        if offset < 0.0 {
+            return None;
+        }
+        let row = (offset / ROW_H) as usize;
+        (row < rows).then_some(row)
+    }
+
+    /// Where a surface's widgets start. At the bottom of the screen the
+    /// surface fills the window above the query box.
+    pub fn surface_top(bottom: bool) -> f32 {
+        if bottom { LIST_PAD } else { LIST_TOP }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn bottom_rows_stack_upward_from_the_query_box() {
+            let h = height(3);
+            assert_eq!(input_top(h, true), h - INPUT_H);
+            // The first result sits directly above the divider and padding.
+            assert_eq!(row_top(0, h, true) + ROW_H, h - LIST_TOP);
+            assert_eq!(row_top(2, h, true), LIST_PAD);
+            assert_eq!(row_top(1, h, false), LIST_TOP + ROW_H);
+        }
+
+        #[test]
+        fn row_hit_testing_matches_drawing() {
+            for bottom in [false, true] {
+                let h = height(4);
+                for row in 0..4 {
+                    let mid = row_top(row, h, bottom) + ROW_H / 2.0;
+                    assert_eq!(row_at(mid, 4, h, bottom), Some(row));
+                }
+                assert_eq!(row_at(input_top(h, bottom) + 1.0, 4, h, bottom), None);
+                // Fewer results than rows leave empty space away from the box.
+                assert_eq!(row_at(row_top(3, h, bottom) + 1.0, 2, h, bottom), None);
+            }
         }
     }
 }
@@ -57,6 +120,35 @@ pub struct Frame<'a> {
     pub scroll: usize,
     pub rows: usize,
     pub icons: &'a HashMap<String, Arc<IconPixels>>,
+    /// Drawn instead of the results while a surface is open.
+    pub surface: Option<SurfaceFrame<'a>>,
+    /// The query box is at the bottom and results stack upward.
+    pub bottom: bool,
+    pub opacity: f32,
+    pub dock_opacity: f32,
+    pub shared: bool,
+    pub radius: f32,
+    pub content_size: Option<(f32, f32)>,
+}
+
+pub struct SurfaceFrame<'a> {
+    pub widgets: &'a [Widget],
+    /// From `nav::layout`, relative to the surface's top-left corner.
+    pub rects: &'a [Rect],
+    pub focus: usize,
+    /// The cursor inside the focused widget, such as an output device.
+    pub stop: usize,
+    pub scroll: f32,
+    pub rows: usize,
+}
+
+/// Where the surface's widgets start, in window DIPs.
+pub fn surface_origin(bottom: bool) -> (f32, f32) {
+    (PAD, surface_top(bottom))
+}
+
+pub fn surface_width() -> f32 {
+    WIDTH - 2.0 * PAD
 }
 
 struct Formats {
@@ -67,6 +159,41 @@ struct Formats {
     glyph: IDWriteTextFormat,
     search_glyph: IDWriteTextFormat,
     letter: IDWriteTextFormat,
+    value: IDWriteTextFormat,
+    small: IDWriteTextFormat,
+}
+
+// Layouts survive animation geometry changes; keys include every shaping input.
+struct CachedLayout {
+    text: String,
+    width: f32,
+    layout: IDWriteTextLayout,
+}
+
+struct CachedTitle {
+    text: String,
+    width: f32,
+    highlights: Vec<(u32, u32)>,
+    layout: IDWriteTextLayout,
+}
+
+fn cached_layout(
+    cached: &mut Option<CachedLayout>,
+    dw: &IDWriteFactory,
+    format: &IDWriteTextFormat,
+    text: &str,
+    width: f32,
+    height: f32,
+) -> Result<IDWriteTextLayout> {
+    if cached.as_ref().is_none_or(|c| c.text != text || c.width != width) {
+        let layout = unsafe { dw.CreateTextLayout(&wide(text), format, width, height)? };
+        *cached = Some(CachedLayout {
+            text: text.into(),
+            width,
+            layout,
+        });
+    }
+    Ok(cached.as_ref().unwrap().layout.clone())
 }
 
 struct Target {
@@ -74,6 +201,9 @@ struct Target {
     brush: ID2D1SolidColorBrush,
     accent: ID2D1SolidColorBrush,
     bitmaps: HashMap<String, ID2D1Bitmap>,
+    query_layout: Option<CachedLayout>,
+    chip_layout: Option<CachedLayout>,
+    titles: Vec<Option<CachedTitle>>,
 }
 
 pub struct Renderer {
@@ -83,6 +213,8 @@ pub struct Renderer {
     target: Option<Target>,
     dpi: f32,
     input_scroll: f32,
+    /// Where the last frame drew each widget's stops, for mouse clicks.
+    stops: Vec<(usize, usize, Rect)>,
 }
 
 impl Renderer {
@@ -105,7 +237,15 @@ impl Renderer {
                 glyph: text_format(&dwrite, icons, 16.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 search_glyph: text_format(&dwrite, icons, 17.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 letter: text_format(&dwrite, ui, 15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+                value: text_format(
+                    &dwrite,
+                    w!("Segoe UI Variable Display"),
+                    22.0,
+                    DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                )?,
+                small: ellipsized(&dwrite, text_format(&dwrite, ui, 12.0, DWRITE_FONT_WEIGHT_NORMAL)?)?,
             };
+            formats.small.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
             formats.hint.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)?;
             for format in [&formats.glyph, &formats.search_glyph, &formats.letter] {
                 format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
@@ -117,6 +257,7 @@ impl Renderer {
                 target: None,
                 dpi: 96.0,
                 input_scroll: 0.0,
+                stops: Vec::new(),
             })
         }
     }
@@ -131,12 +272,20 @@ impl Renderer {
     pub fn resize(&mut self, width: u32, height: u32) {
         if let Some(t) = &self.target {
             unsafe {
-                let _ = t.rt.Resize(&D2D_SIZE_U { width, height });
+                let size = t.rt.GetPixelSize();
+                if size.width != width || size.height != height {
+                    let _ = t.rt.Resize(&D2D_SIZE_U { width, height });
+                }
             }
         }
     }
 
-    pub fn draw(&mut self, hwnd: HWND, frame: &Frame) -> Result<()> {
+    pub fn draw(
+        &mut self,
+        hwnd: HWND,
+        frame: &Frame,
+        dock: impl FnOnce(&ID2D1HwndRenderTarget) -> Result<()>,
+    ) -> Result<()> {
         if self.target.is_none() {
             self.target = Some(self.create_target(hwnd)?);
         }
@@ -145,9 +294,56 @@ impl Renderer {
         let rt = target.rt.clone();
         let result = unsafe {
             rt.BeginDraw();
-            let drawn = draw_frame(&self.dwrite, &self.formats, target, &mut self.input_scroll, frame);
-            let ended = rt.EndDraw(None, None);
-            drawn.and(ended)
+            self.stops.clear();
+            if frame.shared {
+                crate::theme::paint_background(&rt, &target.brush, frame.palette, frame.radius);
+            } else {
+                rt.Clear(Some(&frame.palette.background));
+            }
+            let size = rt.GetSize();
+            let (width, height) = frame.content_size.unwrap_or((size.width, size.height));
+            let (x, y) = crate::morph::content_offset(size.width, size.height, width, height);
+            let layer = |opacity| D2D1_LAYER_PARAMETERS {
+                contentBounds: rect(-10000., -10000., 10000., 10000.),
+                opacity,
+                maskTransform: Matrix3x2::identity(),
+                ..Default::default()
+            };
+            if frame.dock_opacity > 0.0 && frame.dock_opacity < 1.0 {
+                rt.PushLayer(&layer(frame.dock_opacity), None);
+            }
+            let dock_result = if frame.dock_opacity > 0.0 { dock(&rt) } else { Ok(()) };
+            if frame.dock_opacity > 0.0 && frame.dock_opacity < 1.0 {
+                rt.PopLayer();
+            }
+            if frame.opacity > 0.0 && frame.opacity < 1.0 {
+                rt.PushLayer(&layer(frame.opacity), None);
+            }
+            rt.SetTransform(&Matrix3x2::translation(x, y));
+            let drawn = if frame.opacity > 0.0 {
+                draw_frame(&self.dwrite, &self.formats, target, &mut self.input_scroll, frame).and_then(|()| {
+                    match &frame.surface {
+                        Some(surface) => {
+                            draw_surface(&self.dwrite, &self.formats, target, frame, surface, &mut self.stops)
+                        }
+                        None => Ok(()),
+                    }
+                })
+            } else {
+                Ok(())
+            };
+            rt.SetTransform(&Matrix3x2::identity());
+            if frame.opacity > 0.0 && frame.opacity < 1.0 {
+                rt.PopLayer();
+            }
+            let ended = {
+                let _span = crate::util::perf::Span::new("present");
+                rt.EndDraw(None, None)
+            };
+            if ended.is_ok() && drawn.is_ok() && frame.opacity > 0.0 {
+                crate::util::perf::present();
+            }
+            dock_result.and(drawn).and(ended)
         };
         if let Err(e) = &result
             && e.code() == D2DERR_RECREATE_TARGET
@@ -156,6 +352,14 @@ impl Renderer {
             return Ok(());
         }
         result
+    }
+
+    /// The widget and stop drawn at window DIP `(x, y)` in the last frame.
+    pub fn stop_at(&self, x: f32, y: f32) -> Option<(usize, usize)> {
+        self.stops
+            .iter()
+            .find(|(_, _, r)| r.contains(x, y))
+            .map(|&(widget, stop, _)| (widget, stop))
     }
 
     fn create_target(&self, hwnd: HWND) -> Result<Target> {
@@ -194,6 +398,9 @@ impl Renderer {
                 brush: rt.CreateSolidColorBrush(&white, None)?,
                 accent: rt.CreateSolidColorBrush(&white, None)?,
                 bitmaps: HashMap::new(),
+                query_layout: None,
+                chip_layout: None,
+                titles: Vec::new(),
                 rt,
             })
         }
@@ -290,13 +497,16 @@ unsafe fn draw_frame(
     unsafe {
         let rt: &ID2D1RenderTarget = &t.rt;
         let p = f.palette;
-        let width = rt.GetSize().width;
+        let width = f.content_size.map_or(rt.GetSize().width, |s| s.0);
         let brush = &t.brush;
         let accent = &t.accent;
         accent.SetColor(&p.accent);
 
-        rt.Clear(Some(&p.background));
-
+        // The query box is drawn from y = 0 and moved to where it sits.
+        let window_h = f.content_size.map_or(rt.GetSize().height, |s| s.1);
+        let (ox, oy) = crate::morph::content_offset(rt.GetSize().width, rt.GetSize().height, width, window_h);
+        let input_y = input_top(window_h, f.bottom);
+        rt.SetTransform(&Matrix3x2::translation(ox, oy + input_y));
         let mid = INPUT_H / 2.0;
         brush.SetColor(&p.placeholder);
         draw_text(rt, "\u{E721}", &fm.search_glyph, rect(16.0, 0.0, 44.0, INPUT_H), brush);
@@ -304,7 +514,7 @@ unsafe fn draw_frame(
         let mut text_x = INPUT_TEXT_X;
         if let Some(chip) = f.chip {
             let label = format!("{chip} \u{203A}");
-            let layout = dw.CreateTextLayout(&wide(&label), &fm.hint, 240.0, INPUT_H)?;
+            let layout = cached_layout(&mut t.chip_layout, dw, &fm.hint, &label, 240.0, INPUT_H)?;
             let mut metrics = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut metrics)?;
             let chip_w = metrics.width + 16.0;
@@ -336,7 +546,7 @@ unsafe fn draw_frame(
                 brush,
             );
         } else {
-            let layout = dw.CreateTextLayout(&wide(f.text), &fm.query, 100_000.0, INPUT_H)?;
+            let layout = cached_layout(&mut t.query_layout, dw, &fm.query, f.text, 100_000.0, INPUT_H)?;
             let caret = caret_x(&layout, f.caret);
             // Keep the caret in view when the text is wider than the box.
             if caret - *input_scroll > box_w - 2.0 {
@@ -375,13 +585,18 @@ unsafe fn draw_frame(
         if f.caret_visible {
             rt.FillRectangle(&rect(caret_at, mid - 12.0, caret_at + 1.5, mid + 12.0), accent);
         }
+        rt.SetTransform(&Matrix3x2::translation(ox, oy));
 
-        if f.rows > 0 {
+        let divider = if f.bottom { input_y - 1.0 } else { INPUT_H };
+        if f.surface.is_some() {
             brush.SetColor(&p.divider);
-            rt.FillRectangle(&rect(0.0, INPUT_H, width, INPUT_H + 1.0), brush);
+            rt.FillRectangle(&rect(0.0, divider, width, divider + 1.0), brush);
+        } else if f.rows > 0 {
+            brush.SetColor(&p.divider);
+            rt.FillRectangle(&rect(0.0, divider, width, divider + 1.0), brush);
 
             for (row, (index, item)) in f.results.iter().enumerate().skip(f.scroll).take(f.rows).enumerate() {
-                let top = LIST_TOP + row as f32 * ROW_H;
+                let top = row_top(row, window_h, f.bottom);
                 let mid = top + ROW_H / 2.0;
                 let selected = index == f.selected;
 
@@ -436,15 +651,31 @@ unsafe fn draw_frame(
                 }
 
                 let text_right = width - PAD - HINT_W;
-                let title = dw.CreateTextLayout(&wide(&item.title), &fm.title, text_right - TEXT_X, 20.0)?;
-                for &(start, length) in &item.highlights {
-                    let range = DWRITE_TEXT_RANGE {
-                        startPosition: start,
-                        length,
-                    };
-                    title.SetDrawingEffect(&accent.cast::<windows::core::IUnknown>()?, range)?;
-                    title.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, range)?;
+                if t.titles.len() < f.rows {
+                    t.titles.resize_with(f.rows, || None);
                 }
+                let title_width = text_right - TEXT_X;
+                if t.titles[row]
+                    .as_ref()
+                    .is_none_or(|c| c.text != item.title || c.width != title_width || c.highlights != item.highlights)
+                {
+                    let title = dw.CreateTextLayout(&wide(&item.title), &fm.title, title_width, 20.0)?;
+                    for &(start, length) in &item.highlights {
+                        let range = DWRITE_TEXT_RANGE {
+                            startPosition: start,
+                            length,
+                        };
+                        title.SetDrawingEffect(&accent.cast::<windows::core::IUnknown>()?, range)?;
+                        title.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, range)?;
+                    }
+                    t.titles[row] = Some(CachedTitle {
+                        text: item.title.clone(),
+                        width: title_width,
+                        highlights: item.highlights.clone(),
+                        layout: title,
+                    });
+                }
+                let title = &t.titles[row].as_ref().unwrap().layout;
                 let title_top = if item.subtitle.is_empty() {
                     mid - 10.0
                 } else {
@@ -456,7 +687,7 @@ unsafe fn draw_frame(
                         X: TEXT_X,
                         Y: title_top,
                     },
-                    &title,
+                    title,
                     brush,
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                 );
@@ -485,11 +716,14 @@ unsafe fn draw_frame(
             }
 
             if f.results.len() > f.rows {
-                let track_top = LIST_TOP;
+                // Rows run upward at the bottom, so the track does too.
+                let track_top = row_top(if f.bottom { f.rows - 1 } else { 0 }, window_h, f.bottom);
                 let track_h = f.rows as f32 * ROW_H;
                 let thumb_h = (track_h * f.rows as f32 / f.results.len() as f32).max(24.0);
                 let max_scroll = (f.results.len() - f.rows) as f32;
-                let thumb_top = track_top + (track_h - thumb_h) * (f.scroll as f32 / max_scroll);
+                let progress = f.scroll as f32 / max_scroll;
+                let progress = if f.bottom { 1.0 - progress } else { progress };
+                let thumb_top = track_top + (track_h - thumb_h) * progress;
                 brush.SetColor(&p.scrollbar);
                 rt.FillRoundedRectangle(
                     &rounded(rect(width - 5.0, thumb_top, width - 2.5, thumb_top + thumb_h), 1.25),
@@ -498,6 +732,322 @@ unsafe fn draw_frame(
             }
         }
 
+        Ok(())
+    }
+}
+
+fn d2d(r: &Rect, dx: f32, dy: f32) -> D2D_RECT_F {
+    rect(r.x + dx, r.y + dy, r.x + r.w + dx, r.bottom() + dy)
+}
+
+/// Draws a surface's widgets as tiles below the query box.
+unsafe fn draw_surface(
+    _dw: &IDWriteFactory,
+    fm: &Formats,
+    t: &mut Target,
+    f: &Frame,
+    s: &SurfaceFrame,
+    stops: &mut Vec<(usize, usize, Rect)>,
+) -> Result<()> {
+    unsafe {
+        let rt: &ID2D1RenderTarget = &t.rt;
+        let p = f.palette;
+        let brush = &t.brush;
+        let accent = &t.accent;
+        let (ox, oy) = surface_origin(f.bottom);
+        let view_h = s.rows as f32 * ROW_H;
+        let dy = oy - s.scroll;
+        rt.PushAxisAlignedClip(
+            &rect(0.0, oy - 2.0, WIDTH, oy + view_h + 2.0),
+            D2D1_ANTIALIAS_MODE_ALIASED,
+        );
+        if s.widgets.is_empty() {
+            brush.SetColor(&p.subtext);
+            draw_text(
+                rt,
+                "Nothing matches",
+                &fm.small,
+                rect(ox, oy, ox + surface_width(), oy + 48.0),
+                brush,
+            );
+        }
+        for (index, (widget, r)) in s.widgets.iter().zip(s.rects).enumerate() {
+            if r.bottom() + dy < oy || r.y + dy > oy + view_h {
+                continue;
+            }
+            let focused = index == s.focus;
+            let tile = d2d(r, ox, dy);
+            let (left, top, right) = (tile.left, tile.top, tile.right);
+            brush.SetColor(if focused { &p.row_selected } else { &p.tile });
+            rt.FillRoundedRectangle(&rounded(tile, 8.0), brush);
+            if focused {
+                rt.DrawRoundedRectangle(
+                    &rounded(rect(left + 0.75, top + 0.75, right - 0.75, tile.bottom - 0.75), 7.5),
+                    accent,
+                    1.5,
+                    None,
+                );
+            }
+
+            // The icon or glyph, then the label and detail.
+            let icon_rect = rect(left + 12.0, top + 12.0, left + 36.0, top + 36.0);
+            let icon = widget
+                .icon
+                .as_ref()
+                .and_then(|key| f.icons.get(key).and_then(|px| bitmap(&mut t.bitmaps, rt, key, px)));
+            let active = match &widget.input {
+                Input::Toggle { on, .. } => *on,
+                Input::Slider { muted, .. } => !muted,
+                _ => true,
+            };
+            if let Some(icon) = icon {
+                rt.DrawBitmap(
+                    &icon,
+                    Some(&icon_rect),
+                    1.0,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                    None,
+                );
+            } else {
+                brush.SetColor(&p.subtext);
+                draw_text(
+                    rt,
+                    widget.glyph,
+                    &fm.glyph,
+                    icon_rect,
+                    if active { accent } else { brush },
+                );
+            }
+            let text_x = left + 48.0;
+
+            match &widget.input {
+                Input::Info { value } => {
+                    brush.SetColor(&p.subtext);
+                    let label = if widget.detail.is_empty() {
+                        widget.label.clone()
+                    } else {
+                        format!("{} · {}", widget.label, widget.detail)
+                    };
+                    draw_text(
+                        rt,
+                        &label,
+                        &fm.subtitle,
+                        rect(text_x, top + 10.0, right - 12.0, top + 28.0),
+                        brush,
+                    );
+                    brush.SetColor(&p.text);
+                    draw_text(
+                        rt,
+                        value,
+                        &fm.value,
+                        rect(text_x, top + 28.0, right - 12.0, top + 60.0),
+                        brush,
+                    );
+                }
+                Input::Toggle { on, .. } => {
+                    let switch_right = right - 14.0;
+                    brush.SetColor(&p.text);
+                    draw_text(
+                        rt,
+                        &widget.label,
+                        &fm.title,
+                        rect(text_x, top + 13.0, switch_right - 46.0, top + 33.0),
+                        brush,
+                    );
+                    brush.SetColor(&p.subtext);
+                    draw_text(
+                        rt,
+                        &widget.detail,
+                        &fm.subtitle,
+                        rect(text_x, top + 35.0, switch_right - 46.0, top + 53.0),
+                        brush,
+                    );
+                    let mid = top + r.h / 2.0;
+                    let pill = rect(switch_right - 36.0, mid - 9.0, switch_right, mid + 9.0);
+                    if *on {
+                        rt.FillRoundedRectangle(&rounded(pill, 9.0), accent);
+                    } else {
+                        brush.SetColor(&p.scrollbar);
+                        rt.FillRoundedRectangle(&rounded(pill, 9.0), brush);
+                    }
+                    let knob_x = if *on { pill.right - 9.0 } else { pill.left + 9.0 };
+                    brush.SetColor(if *on { &p.background_solid } else { &p.text });
+                    rt.FillEllipse(
+                        &D2D1_ELLIPSE {
+                            point: Vector2 { X: knob_x, Y: mid },
+                            radiusX: 6.0,
+                            radiusY: 6.0,
+                        },
+                        brush,
+                    );
+                }
+                Input::Slider { value, muted, .. } => {
+                    let label = if *muted {
+                        format!("{} · Muted", widget.label)
+                    } else if widget.detail.is_empty() {
+                        widget.label.clone()
+                    } else {
+                        format!("{} · {}", widget.label, widget.detail)
+                    };
+                    brush.SetColor(&p.text);
+                    draw_text(
+                        rt,
+                        &label,
+                        &fm.title,
+                        rect(text_x, top + 8.0, right - 64.0, top + 28.0),
+                        brush,
+                    );
+                    brush.SetColor(&p.subtext);
+                    draw_text(
+                        rt,
+                        &format!("{value}%"),
+                        &fm.hint,
+                        rect(right - 64.0, top + 8.0, right - 16.0, top + 28.0),
+                        brush,
+                    );
+                    let (x0, x1) = nav::slider_track(r);
+                    let (x0, x1) = (x0 + ox, x1 + ox);
+                    let y = top + 40.0;
+                    brush.SetColor(&p.scrollbar);
+                    rt.FillRoundedRectangle(&rounded(rect(x0, y - 2.0, x1, y + 2.0), 2.0), brush);
+                    let at = x0 + (x1 - x0) * (*value).min(100) as f32 / 100.0;
+                    if *muted {
+                        brush.SetColor(&p.subtext);
+                        rt.FillRoundedRectangle(&rounded(rect(x0, y - 2.0, at, y + 2.0), 2.0), brush);
+                    } else {
+                        rt.FillRoundedRectangle(&rounded(rect(x0, y - 2.0, at, y + 2.0), 2.0), accent);
+                    }
+                    brush.SetColor(&p.text);
+                    rt.FillEllipse(
+                        &D2D1_ELLIPSE {
+                            point: Vector2 { X: at, Y: y },
+                            radiusX: if focused { 7.0 } else { 6.0 },
+                            radiusY: if focused { 7.0 } else { 6.0 },
+                        },
+                        brush,
+                    );
+                }
+                Input::Choice { options, selected } => {
+                    brush.SetColor(&p.text);
+                    draw_text(
+                        rt,
+                        &widget.label,
+                        &fm.title,
+                        rect(text_x, top + 14.0, right - 12.0, top + 34.0),
+                        brush,
+                    );
+                    let names: Vec<&str> = options.iter().map(|(name, _)| name.as_str()).collect();
+                    for (stop, (chip, name)) in nav::chip_rects(r, &names).iter().zip(&names).enumerate() {
+                        let c = d2d(chip, ox, dy);
+                        if focused && stop == s.stop {
+                            brush.SetColor(&p.scrollbar);
+                            rt.FillRoundedRectangle(&rounded(c, 6.0), brush);
+                        }
+                        let border = if stop == *selected { accent } else { brush };
+                        brush.SetColor(&p.divider);
+                        rt.DrawRoundedRectangle(
+                            &rounded(rect(c.left + 0.5, c.top + 0.5, c.right - 0.5, c.bottom - 0.5), 6.0),
+                            border,
+                            1.0,
+                            None,
+                        );
+                        let text = rect(c.left + 8.0, c.top, c.right - 8.0, c.bottom);
+                        if stop == *selected {
+                            draw_text(rt, name, &fm.small, text, accent);
+                        } else {
+                            brush.SetColor(&p.text);
+                            draw_text(rt, name, &fm.small, text, brush);
+                        }
+                        stops.push((
+                            index,
+                            stop,
+                            Rect {
+                                x: c.left,
+                                y: c.top,
+                                w: chip.w,
+                                h: chip.h,
+                            },
+                        ));
+                    }
+                }
+                Input::Buttons { buttons } => {
+                    let buttons_w = buttons.len() as f32 * 40.0;
+                    let text_right = right - 16.0 - buttons_w;
+                    brush.SetColor(&p.text);
+                    draw_text(
+                        rt,
+                        &widget.label,
+                        &fm.title,
+                        rect(text_x, top + 12.0, text_right, top + 32.0),
+                        brush,
+                    );
+                    brush.SetColor(&p.subtext);
+                    draw_text(
+                        rt,
+                        &widget.detail,
+                        &fm.subtitle,
+                        rect(text_x, top + 33.0, text_right, top + 51.0),
+                        brush,
+                    );
+                    let mid = top + r.h / 2.0;
+                    for (stop, (glyph, _)) in buttons.iter().enumerate() {
+                        let x = text_right + 8.0 + stop as f32 * 40.0;
+                        let button = rect(x, mid - 16.0, x + 32.0, mid + 16.0);
+                        if focused && stop == s.stop {
+                            brush.SetColor(&p.scrollbar);
+                            rt.FillEllipse(
+                                &D2D1_ELLIPSE {
+                                    point: Vector2 { X: x + 16.0, Y: mid },
+                                    radiusX: 16.0,
+                                    radiusY: 16.0,
+                                },
+                                brush,
+                            );
+                        }
+                        brush.SetColor(&p.text);
+                        draw_text(rt, glyph, &fm.glyph, button, brush);
+                        stops.push((
+                            index,
+                            stop,
+                            Rect {
+                                x,
+                                y: mid - 16.0,
+                                w: 32.0,
+                                h: 32.0,
+                            },
+                        ));
+                    }
+                }
+                Input::Link { .. } => {
+                    brush.SetColor(&p.text);
+                    draw_text(
+                        rt,
+                        &widget.label,
+                        &fm.title,
+                        rect(text_x, top + 13.0, right - 12.0, top + 33.0),
+                        brush,
+                    );
+                    brush.SetColor(&p.subtext);
+                    draw_text(
+                        rt,
+                        &widget.detail,
+                        &fm.subtitle,
+                        rect(text_x, top + 35.0, right - 12.0, top + 53.0),
+                        brush,
+                    );
+                }
+            }
+        }
+        rt.PopAxisAlignedClip();
+
+        let content = nav::content_height(s.rects);
+        if content > view_h {
+            let thumb_h = (view_h * view_h / content).max(24.0);
+            let thumb_top = oy + (view_h - thumb_h) * (s.scroll / (content - view_h));
+            brush.SetColor(&p.scrollbar);
+            let x = WIDTH - 5.0;
+            rt.FillRoundedRectangle(&rounded(rect(x, thumb_top, x + 2.5, thumb_top + thumb_h), 1.25), brush);
+        }
         Ok(())
     }
 }

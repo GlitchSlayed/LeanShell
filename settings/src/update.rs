@@ -52,6 +52,10 @@ impl Release {
 
 /// Returns the latest release if it is newer than this app.
 pub fn check() -> Result<Option<Release>, String> {
+    // Nightly builds are installed by hand; stable releases would replace them.
+    if crate::channel::NIGHTLY {
+        return Ok(None);
+    }
     let body = get(LATEST_URL).map_err(|error| format!("Cannot check for updates: {error}"))?;
     let release = parse_release(&body)?;
     Ok(is_newer(release.version(), env!("CARGO_PKG_VERSION")).then_some(release))
@@ -219,7 +223,7 @@ fn swap(target: &Path, new: &Path) -> Result<(), String> {
 /// running.
 fn stop_launcher(dir: &Path) -> Result<bool, String> {
     unsafe {
-        let Ok(hwnd) = FindWindowW(w!("Wisp.Launcher"), None) else {
+        let Ok(hwnd) = FindWindowW(crate::channel::LAUNCHER_CLASS, None) else {
             return Ok(false);
         };
         let mut pid = 0;

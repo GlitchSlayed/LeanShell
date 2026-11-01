@@ -41,7 +41,7 @@ impl Kind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Launch {
         id: String,
@@ -56,6 +56,8 @@ pub enum Action {
     },
     Reveal(String),
     Command(Command),
+    /// Opens the surface at this index in the surface library.
+    Surface(usize),
     /// A row that only shows information, such as "Looking for networks…".
     None,
 }

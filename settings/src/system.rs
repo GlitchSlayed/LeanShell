@@ -12,7 +12,7 @@ use windows::{
 };
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-const RUN_VALUE: PCWSTR = w!("Wisp");
+const RUN_VALUE: PCWSTR = crate::channel::RUN_VALUE;
 
 fn wide(value: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
@@ -88,7 +88,7 @@ pub fn style_title_bar(title: &str, dark: bool, background: u32, text: u32) {
 
 pub fn notify_launcher() {
     unsafe {
-        if let Ok(hwnd) = FindWindowW(w!("Wisp.Launcher"), None) {
+        if let Ok(hwnd) = FindWindowW(crate::channel::LAUNCHER_CLASS, None) {
             let _ = PostMessageW(Some(hwnd), WM_APP + 6, WPARAM(0), LPARAM(0));
         }
     }

@@ -1,5 +1,9 @@
 #![windows_subsystem = "windows"]
 
+// Shared with the launcher; this app uses only some of the names.
+#[allow(dead_code)]
+#[path = "../../src/channel.rs"]
+mod channel;
 mod config;
 mod hotkey;
 mod palette;

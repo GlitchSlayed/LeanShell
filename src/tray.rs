@@ -70,7 +70,7 @@ pub fn show_menu(hwnd: HWND, hotkey: &str, autostart: bool) -> u32 {
         let item = |flags: MENU_ITEM_FLAGS, id: u32, text: &str| {
             let _ = AppendMenuW(menu, flags, id as usize, &HSTRING::from(text));
         };
-        item(MF_STRING, CMD_OPEN, &format!("Open Wisp\t{hotkey}"));
+        item(MF_STRING, CMD_OPEN, &format!("Open {}\t{hotkey}", crate::channel::NAME));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         item(MF_STRING, CMD_RESCAN, "Rescan apps");
         item(MF_STRING, CMD_SETTINGS, "Settings");

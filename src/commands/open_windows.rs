@@ -71,7 +71,7 @@ unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
     }
 }
 
-fn process_path(pid: u32) -> String {
+pub fn process_path(pid: u32) -> String {
     unsafe {
         let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
             return String::new();

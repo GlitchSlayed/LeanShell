@@ -6,6 +6,7 @@
 //! from it; the worker posts a message when new state arrives.
 
 pub mod audio;
+pub mod battery;
 pub mod bluetooth;
 pub mod media;
 pub mod open_windows;
@@ -18,7 +19,7 @@ pub mod wifi;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
@@ -41,6 +42,10 @@ const WIFI_KEYWORDS: [&str; 4] = ["wifi", "wi-fi", "wireless", "wlan"];
 /// A query that starts with this lists open windows.
 const WINDOW_PREFIX: &str = "w ";
 const MAX_WINDOWS: usize = 30;
+/// The worker reads the state again after this many requests or this long,
+/// even if more requests wait.
+const MAX_BATCH: usize = 16;
+const MAX_BATCH_TIME: Duration = Duration::from_millis(250);
 
 pub mod glyph {
     pub const WIFI: &str = "\u{E701}";
@@ -70,12 +75,19 @@ pub enum Command {
     BluetoothPower(bool),
     Volume(u32),
     Mute(bool),
+    /// Sets an app's volume, as the Volume mixer does.
+    AppVolume {
+        pid: u32,
+        percent: u32,
+    },
     /// Makes the output device with this ID the default.
     Output(String),
     Media(Control),
     FocusWindow(isize),
     CloseWindow(isize),
     Power(Power),
+    /// Quits Wisp. The launcher handles it, so the worker never sees it.
+    Quit,
 }
 
 impl Command {
@@ -83,7 +95,7 @@ impl Command {
     pub fn stays_open(&self) -> bool {
         !matches!(
             self,
-            Command::WifiConnect(_) | Command::FocusWindow(_) | Command::Power(_)
+            Command::WifiConnect(_) | Command::FocusWindow(_) | Command::Power(_) | Command::Quit
         )
     }
 }
@@ -96,11 +108,18 @@ pub struct State {
     pub bluetooth: Option<Option<bluetooth::State>>,
     pub audio: Option<Option<audio::State>>,
     pub media: Option<Option<media::State>>,
+    pub battery: Option<Option<battery::State>>,
     pub windows: Vec<open_windows::Window>,
+    /// Apps that play sound on the default output device.
+    pub sessions: Vec<audio::Session>,
+    /// Active output devices, the default first.
+    pub outputs: Vec<audio::Output>,
 }
 
 pub enum Event {
-    State(Box<State>, Vec<(String, Arc<IconPixels>)>),
+    /// New state, icons for new programs, and how many commands the worker
+    /// had run when it read the state.
+    State(Box<State>, Vec<(String, Arc<IconPixels>)>, u64),
     /// The items of a list that Tab opened.
     List(Drill, Vec<ResultItem>),
     Failed(String),
@@ -141,7 +160,8 @@ impl Commands {
         let _ = self.requests.send(Request::List(drill));
     }
 
-    /// Runs a command on the worker thread, then reads the state again.
+    /// Runs a command on the worker thread, then reads the state again. State
+    /// events count the commands run so far, in the order of these calls.
     pub fn run(&self, command: Command) {
         let _ = self.requests.send(Request::Run(command));
     }
@@ -157,43 +177,63 @@ fn worker(requests: Receiver<Request>, events: Sender<Event>, icon_size: i32, no
         }
     };
     let mut icons_sent = HashSet::new();
-    let mut refresh = || {
+    let mut ran = 0;
+    let mut refresh = |ran: u64| {
         let state = read_state();
-        let icons = state
-            .windows
-            .iter()
-            .filter_map(|window| Some((window.icon_key()?, window.exe.clone())))
+        let windows = state.windows.iter().map(|w| (w.icon_key(), &w.exe));
+        let sessions = state.sessions.iter().map(|s| (s.icon_key(), &s.exe));
+        let icons = windows
+            .chain(sessions)
+            .filter_map(|(key, exe)| Some((key?, exe.clone())))
             .filter(|(key, _)| icons_sent.insert(key.clone()))
             .filter_map(|(key, exe)| Some((key, Arc::new(exe_icon(&exe, icon_size)?))))
             .collect();
-        send(Event::State(Box::new(state), icons));
+        send(Event::State(Box::new(state), icons, ran));
     };
-    while let Ok(request) = requests.recv() {
-        match request {
-            Request::Refresh => refresh(),
-            Request::List(drill) => send(Event::List(drill, list_items(drill))),
-            Request::Run(command) => {
-                let result = match &command {
-                    Command::WifiPower(on) => wifi::set_power(*on),
-                    Command::WifiConnect(profile) => wifi::connect(profile),
-                    Command::BluetoothPower(on) => bluetooth::set_power(*on),
-                    Command::Volume(percent) => audio::set_volume(*percent),
-                    Command::Mute(muted) => audio::set_mute(*muted),
-                    Command::Output(id) => audio::set_output(id),
-                    Command::Media(control) => media::control(*control),
-                    Command::FocusWindow(hwnd) => open_windows::focus(*hwnd),
-                    Command::CloseWindow(hwnd) => open_windows::close(*hwnd),
-                    Command::Power(power) => power::run(*power),
-                };
-                if let Err(error) = result {
-                    send(Event::Failed(error));
+    while let Ok(first) = requests.recv() {
+        // Handle the queued requests, then read the state once. Holding a
+        // slider key queues many volume changes.
+        let started = Instant::now();
+        let mut stale = false;
+        let mut handled = 0;
+        let mut next = Some(first);
+        while let Some(request) = next.take() {
+            handled += 1;
+            match request {
+                Request::Refresh => stale = true,
+                Request::List(drill) => send(Event::List(drill, list_items(drill))),
+                Request::Run(command) => {
+                    let result = match &command {
+                        Command::WifiPower(on) => wifi::set_power(*on),
+                        Command::WifiConnect(profile) => wifi::connect(profile),
+                        Command::BluetoothPower(on) => bluetooth::set_power(*on),
+                        Command::Volume(percent) => audio::set_volume(*percent),
+                        Command::Mute(muted) => audio::set_mute(*muted),
+                        Command::AppVolume { pid, percent } => audio::set_app_volume(*pid, *percent),
+                        Command::Output(id) => audio::set_output(id),
+                        Command::Media(control) => media::control(*control),
+                        Command::FocusWindow(hwnd) => open_windows::focus(*hwnd),
+                        Command::CloseWindow(hwnd) => open_windows::close(*hwnd),
+                        Command::Power(power) => power::run(*power),
+                        Command::Quit => Ok(()),
+                    };
+                    if let Err(error) = result {
+                        send(Event::Failed(error));
+                    }
+                    // Apps update their media state and close windows a moment later.
+                    if matches!(command, Command::Media(_) | Command::CloseWindow(_)) {
+                        std::thread::sleep(Duration::from_millis(300));
+                    }
+                    ran += 1;
+                    stale = true;
                 }
-                // Apps update their media state and close windows a moment later.
-                if matches!(command, Command::Media(_) | Command::CloseWindow(_)) {
-                    std::thread::sleep(Duration::from_millis(300));
-                }
-                refresh();
             }
+            if handled < MAX_BATCH && started.elapsed() < MAX_BATCH_TIME {
+                next = requests.try_recv().ok();
+            }
+        }
+        if stale {
+            refresh(ran);
         }
     }
 }
@@ -204,7 +244,10 @@ fn read_state() -> State {
         bluetooth: Some(bluetooth::state()),
         audio: Some(audio::state()),
         media: Some(media::state()),
+        battery: Some(battery::state()),
         windows: open_windows::list(),
+        sessions: audio::sessions(),
+        outputs: audio::outputs().unwrap_or_default(),
     }
 }
 
@@ -247,6 +290,7 @@ pub fn search(query: &str, state: &State) -> Vec<ResultItem> {
     items.extend(volume_items(&words, state.audio.as_ref()));
     items.extend(media_items(&words, state.media.as_ref()));
     items.extend(power_items(&query));
+    items.extend(quit_item(&query));
     items.extend(time_items(&words));
     for (title, link) in settings::find(&query) {
         let duplicate = items
@@ -541,6 +585,25 @@ fn power_items(query: &str) -> Vec<ResultItem> {
         .collect()
 }
 
+/// The tray icon is hidden with the taskbar, so the launcher offers Quit too.
+fn quit_item(query: &str) -> Option<ResultItem> {
+    let name = crate::channel::NAME.to_lowercase();
+    let matches = query.chars().count() >= 3
+        && ["quit", "exit"]
+            .iter()
+            .any(|verb| verb.starts_with(query) || format!("{verb} {name}").starts_with(query));
+    matches.then(|| {
+        let title = format!("Quit {}", crate::channel::NAME);
+        row(
+            &title,
+            "Closes the launcher and restores the taskbar",
+            Action::Command(Command::Quit),
+        )
+        .glyph(glyph::CLOSE)
+        .verb("Quit")
+    })
+}
+
 /// `time`, `date`, `time tokyo`, `time in tokyo` and `tokyo time`.
 fn time_items(words: &[&str]) -> Vec<ResultItem> {
     let place = match words {
@@ -795,6 +858,7 @@ mod tests {
                 title: "README.md - runner - Visual Studio Code".into(),
                 exe: r"C:\Apps\Code.exe".into(),
             }],
+            ..State::default()
         }
     }
 
@@ -863,6 +927,8 @@ mod tests {
         assert_eq!(titles("restart", &state), ["Restart"]);
         assert_eq!(titles("shut", &state), ["Shut down"]);
         assert!(titles("re", &state).is_empty());
+        assert_eq!(titles("quit", &state), ["Quit Wisp"]);
+        assert_eq!(titles("exit wi", &state), ["Quit Wisp"]);
         assert_eq!(search("lock", &state)[0].subtitle, "Locks the PC");
         assert_eq!(
             search("restart", &state)[0].subtitle,

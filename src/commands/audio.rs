@@ -27,6 +27,25 @@ pub struct State {
     pub device: String,
 }
 
+/// An app's audio, as in the Volume mixer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Session {
+    pub pid: u32,
+    /// The program's path, for its icon. Empty if Windows does not tell.
+    pub exe: String,
+    /// The program's description, such as "Google Chrome", or its file name.
+    pub name: String,
+    /// 0 to 100.
+    pub volume: u32,
+    pub muted: bool,
+}
+
+impl Session {
+    pub fn icon_key(&self) -> Option<String> {
+        (!self.exe.is_empty()).then(|| format!("exe:{}", self.exe.to_lowercase()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Output {
     pub id: String,
@@ -78,6 +97,126 @@ pub fn state() -> Option<State> {
     }
 }
 
+/// The volume (0 to 100) and mute, without the device name that `state` reads,
+/// for frequent polling. `None` if there is no output device.
+pub fn level() -> Option<(u32, bool)> {
+    thread_local! {
+        static READER: std::cell::RefCell<Option<LevelReader>> = const { std::cell::RefCell::new(None) };
+    }
+    READER.with(|reader| {
+        let mut reader = reader.borrow_mut();
+        if reader.is_none() {
+            *reader = LevelReader::new();
+        }
+        if let Some(reader) = reader.as_mut() {
+            reader.read()
+        } else {
+            // Notification registration can fail independently of level queries.
+            let volume = endpoint_volume().ok()?;
+            unsafe {
+                Some((
+                    (volume.GetMasterVolumeLevelScalar().ok()? * 100.0).round() as u32,
+                    volume.GetMute().ok()?.as_bool(),
+                ))
+            }
+        }
+    })
+}
+
+// Keep apartment-bound interfaces on the caller's thread. Device notifications
+// invalidate the endpoint; querying a level never recreates the COM enumerator.
+struct LevelReader {
+    enumerator: IMMDeviceEnumerator,
+    callback: IMMNotificationClient,
+    dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    volume: Option<IAudioEndpointVolume>,
+}
+
+impl LevelReader {
+    fn new() -> Option<Self> {
+        let enumerator = enumerator().ok()?;
+        let dirty = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let callback: IMMNotificationClient = DeviceChanged(dirty.clone()).into();
+        unsafe {
+            enumerator.RegisterEndpointNotificationCallback(&callback).ok()?;
+        }
+        Some(Self {
+            enumerator,
+            callback,
+            dirty,
+            volume: None,
+        })
+    }
+
+    fn read(&mut self) -> Option<(u32, bool)> {
+        use std::sync::atomic::Ordering;
+        unsafe {
+            if self.dirty.swap(false, Ordering::AcqRel) {
+                self.volume = self
+                    .enumerator
+                    .GetDefaultAudioEndpoint(eRender, eConsole)
+                    .and_then(|device| device.Activate(CLSCTX_ALL, None))
+                    .ok();
+            }
+            let Some(volume) = self.volume.as_ref() else {
+                // Retry transient service/activation failures just as the uncached path did.
+                self.dirty.store(true, Ordering::Release);
+                return None;
+            };
+            match (volume.GetMasterVolumeLevelScalar(), volume.GetMute()) {
+                (Ok(level), Ok(muted)) => Some(((level * 100.0).round() as u32, muted.as_bool())),
+                _ => {
+                    self.dirty.store(true, Ordering::Release);
+                    None
+                }
+            }
+        }
+    }
+}
+
+impl Drop for LevelReader {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = self.enumerator.UnregisterEndpointNotificationCallback(&self.callback);
+        }
+    }
+}
+
+#[windows::core::implement(IMMNotificationClient)]
+struct DeviceChanged(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl DeviceChanged_Impl {
+    fn changed(&self) -> windows::core::Result<()> {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+}
+
+impl IMMNotificationClient_Impl for DeviceChanged_Impl {
+    fn OnDeviceStateChanged(&self, _: &PCWSTR, _: DEVICE_STATE) -> windows::core::Result<()> {
+        self.changed()
+    }
+    fn OnDeviceAdded(&self, _: &PCWSTR) -> windows::core::Result<()> {
+        self.changed()
+    }
+    fn OnDeviceRemoved(&self, _: &PCWSTR) -> windows::core::Result<()> {
+        self.changed()
+    }
+    fn OnDefaultDeviceChanged(&self, flow: EDataFlow, role: ERole, _: &PCWSTR) -> windows::core::Result<()> {
+        if flow == eRender && role == eConsole {
+            self.changed()?;
+        }
+        Ok(())
+    }
+    fn OnPropertyValueChanged(
+        &self,
+        _: &PCWSTR,
+        _: &windows::Win32::Foundation::PROPERTYKEY,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+}
+
 /// `percent` is clamped to 0–100. Setting a volume also unmutes.
 pub fn set_volume(percent: u32) -> Result<(), String> {
     let volume = endpoint_volume().map_err(|error| error.message())?;
@@ -92,6 +231,138 @@ pub fn set_volume(percent: u32) -> Result<(), String> {
 pub fn set_mute(muted: bool) -> Result<(), String> {
     let volume = endpoint_volume().map_err(|error| error.message())?;
     unsafe { volume.SetMute(muted, std::ptr::null()).map_err(|error| error.message()) }
+}
+
+/// Volumes of apps that use the default output device, one per process,
+/// sorted by name. Skips system sounds and sessions that have ended.
+pub fn sessions() -> Vec<Session> {
+    let mut sessions: Vec<Session> = Vec::new();
+    for (control, volume) in session_volumes() {
+        unsafe {
+            let Ok(pid) = control.GetProcessId() else { continue };
+            if pid == 0 || sessions.iter().any(|s| s.pid == pid) {
+                continue;
+            }
+            let (Ok(level), Ok(muted)) = (volume.GetMasterVolume(), volume.GetMute()) else {
+                continue;
+            };
+            let exe = super::open_windows::process_path(pid);
+            if HIDDEN
+                .iter()
+                .any(|hidden| super::open_windows::program_name(&exe).eq_ignore_ascii_case(hidden))
+            {
+                continue;
+            }
+            sessions.push(Session {
+                pid,
+                name: display_name(&exe),
+                exe,
+                volume: (level * 100.0).round() as u32,
+                muted: muted.as_bool(),
+            });
+        }
+    }
+    sessions.sort_by_cached_key(|s| s.name.to_lowercase());
+    sessions
+}
+
+/// Windows parts that open audio sessions but are not apps to adjust,
+/// such as the touch keyboard and emoji panel.
+const HIDDEN: [&str; 2] = ["TextInputHost", "ShellExperienceHost"];
+
+/// The description in a program's version info, such as "Google Chrome",
+/// or its file name. Cached, since the state refreshes every second.
+fn display_name(exe: &str) -> String {
+    use std::{collections::HashMap, sync::Mutex};
+    static NAMES: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+    let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    names
+        .get_or_insert_with(HashMap::new)
+        .entry(exe.to_string())
+        .or_insert_with(|| {
+            description(exe).unwrap_or_else(|| match super::open_windows::program_name(exe) {
+                "" => "App".to_string(),
+                name => name.to_string(),
+            })
+        })
+        .clone()
+}
+
+fn description(exe: &str) -> Option<String> {
+    use windows::Win32::{
+        Foundation::PROPERTYKEY,
+        UI::Shell::{IShellItem2, SHCreateItemFromParsingName},
+    };
+    // System.FileDescription, from the file's version info.
+    const FILE_DESCRIPTION: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0x0cef7d53_fa64_11d1_a203_0000f81fedee),
+        pid: 3,
+    };
+    if exe.is_empty() {
+        return None;
+    }
+    unsafe {
+        let item: IShellItem2 = SHCreateItemFromParsingName(&HSTRING::from(exe), None).ok()?;
+        let text = item.GetString(&FILE_DESCRIPTION).ok()?;
+        let name = text.to_string().ok();
+        CoTaskMemFree(Some(text.0 as _));
+        name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty())
+    }
+}
+
+/// The default output device's app sessions that have not ended, without system sounds.
+fn session_volumes() -> Vec<(IAudioSessionControl2, ISimpleAudioVolume)> {
+    use windows::core::Interface;
+    let mut found = Vec::new();
+    unsafe {
+        let Ok(device) = default_device() else { return found };
+        let Ok(manager) = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else {
+            return found;
+        };
+        let Ok(list) = manager.GetSessionEnumerator() else {
+            return found;
+        };
+        for index in 0..list.GetCount().unwrap_or(0) {
+            let Ok(control) = list.GetSession(index) else { continue };
+            if control.GetState().is_ok_and(|state| state == AudioSessionStateExpired) {
+                continue;
+            }
+            let (Ok(control), Ok(volume)) = (
+                control.cast::<IAudioSessionControl2>(),
+                control.cast::<ISimpleAudioVolume>(),
+            ) else {
+                continue;
+            };
+            // S_OK means system sounds; S_FALSE means an app.
+            if control.IsSystemSoundsSession() == windows::Win32::Foundation::S_OK {
+                continue;
+            }
+            found.push((control, volume));
+        }
+    }
+    found
+}
+
+/// Sets the volume of every session of process `pid`. Setting a volume also unmutes.
+pub fn set_app_volume(pid: u32, percent: u32) -> Result<(), String> {
+    let mut set = false;
+    for (control, volume) in session_volumes() {
+        unsafe {
+            if control.GetProcessId().ok() != Some(pid) {
+                continue;
+            }
+            volume
+                .SetMasterVolume(percent.min(100) as f32 / 100.0, std::ptr::null())
+                .and_then(|()| volume.SetMute(false, std::ptr::null()))
+                .map_err(|error| error.message())?;
+            set = true;
+        }
+    }
+    if set {
+        Ok(())
+    } else {
+        Err("The app stopped playing sound.".into())
+    }
 }
 
 /// Active output devices, the default first.

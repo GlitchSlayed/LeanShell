@@ -257,6 +257,8 @@ impl Settings {
         };
         let title = if self.onboarding.is_some() {
             "Welcome to Wisp"
+        } else if crate::channel::NIGHTLY {
+            "Wisp Nightly Settings"
         } else {
             "Wisp Settings"
         };

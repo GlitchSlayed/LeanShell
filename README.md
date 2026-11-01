@@ -22,6 +22,8 @@
 
 Press <kbd>Alt</kbd>+<kbd>Space</kbd>, type an app name, then press <kbd>Enter</kbd>. Wisp uses Rust, Win32, Direct2D and DirectWrite. It needs no .NET runtime, web view, UI framework or PowerToys install.
 
+Wisp can also replace the Windows taskbar with a dock. See [Dock](#dock).
+
 ## Benchmarks
 
 Wisp 0.2.0 and PowerToys Run 0.94 ran on the same machine (i5-12500H, 144 Hz display), with 30 trials each. PowerToys Run used its default config. Each typing trial typed a whole app name, such as `notepad` or `terminal`. Times are median / p90:
@@ -62,8 +64,10 @@ Wisp's settled time includes its file results, which arrive after the app result
   | `lock`, `sleep`, `restart`, `shut down`, `sign out`, `empty recycle bin` | Do it. Restart, shut down, sign out and emptying the Recycle Bin need a second Enter. | |
   | `time`, `date`, `time tokyo` | Copy the time or date | |
   | `display`, `wallpaper`, `dark mode`, … | Open the Windows Settings page | |
+  | `quit`, `exit wisp` | Quit Wisp. If Wisp hides the taskbar, the taskbar comes back. | |
 
   Toggles and volume changes keep the launcher open and show the new state.
+- **Surfaces**: `now` shows the time, battery, Wi-Fi, Bluetooth, volume and the media that is playing. `sound` shows the volume, the output devices and the volume of each app. Wisp updates the values while the surface is open. To add a surface, put a TOML file in `%APPDATA%\wisp\surfaces`. Use [`src/surface/now.toml`](src/surface/now.toml) as an example.
 - **URLs and web search**: open `https://…` and `www.…` links in your browser, or search the web for the query.
 - **Appearance**: acrylic backdrop, rounded corners, light and dark themes that follow Windows, and drawing that scales with display DPI.
 - **Idle CPU use**: 0–16 ms of CPU time in the 10 s benchmark. Windows reports CPU time in steps of 15.6 ms. Worker threads index apps, query the file index and load icons.
@@ -82,24 +86,47 @@ Wisp's settled time includes its file results, which arrive after the app result
 - Lists recently launched apps when the search box is empty.
 - Skips dependency and cache folders in file results, with a configurable list.
 - Stores the config as plain-text TOML that you can keep with your dotfiles.
+- Replaces the taskbar with a dock that holds running apps, the notification area, volume, battery and the clock.
 
 **In both**
 
 - App search with icons and fuzzy matching, with frequently launched apps ranked higher
 - File search through the Windows Search index, also with the `?` prefix
 - Calculator, web search, URLs, shell commands
+- Switching between open windows, system commands (lock, sleep, shut down, empty Recycle Bin), time and date, Windows Settings pages
 - Run as administrator, open the file location
 - Light and dark themes, multiple monitors, per-monitor DPI
 - A settings window
 
 **Only in PowerToys Run** (planned for Wisp)
 
-- Switching between open windows (Window Walker)
-- System commands (shut down, sleep, lock, empty Recycle Bin)
-- Unit conversion, time and date, value generation (GUIDs, hashes, Base64)
-- Windows Settings, services and registry search, folder browsing
+- Unit conversion, value generation (GUIDs, hashes, Base64)
+- Services and registry search, folder browsing
 - VS Code workspaces, Windows Terminal profiles, OneNote
 - Third-party plugins and plugin action keywords
+
+## Dock
+
+The dock replaces the Windows taskbar. To turn it on, add these lines to your config file (see [Config](#config)):
+
+```toml
+position = "bottom"
+dock = true
+hide_taskbar = true
+```
+
+- **The dock hides until you need it.** Move the pointer to the bottom edge of a screen. The dock slides up on that screen. It slides down about 0.5 s after the pointer leaves it. The dock stays hidden while a full-screen app is in front.
+- **The dock shows running apps.** Click an app to switch to it. The app in front has a longer line in your accent color. The search button on the left opens the launcher. To start an app that is not running, use the launcher.
+- **The dock holds the notification area.** Icons that you turn on in **Settings > Personalization > Taskbar > Other system tray icons** appear in the dock. All other icons are behind the **⌄** button. Click, double-click and right-click an icon as on the taskbar. Hover over an icon to see its tooltip.
+- **Volume, battery and clock** are on the right. Scroll over the volume to change it in steps of 2%. Click the volume to mute or unmute. Right-click it to open Sound settings.
+- **The launcher grows out of the dock.** If the dock is visible when you press <kbd>Alt</kbd>+<kbd>Space</kbd>, the dock changes into the launcher in 155 ms. When you close the launcher, it shrinks back into the dock in 135 ms. If the dock is hidden, the launcher opens with no animation.
+- **To reach the real taskbar,** right-click the **⌄** button and choose **Show taskbar**. The taskbar hides again after the pointer and focus leave it.
+- **To quit Wisp** without the tray icon, type `quit` in the launcher, or run `wisp.exe --quit`. The taskbar comes back.
+
+If Wisp stops unexpectedly, a separate watchdog process restores the taskbar. Explorer keeps a copy of every notification icon, so no icon is lost when Wisp stops.
+
+> [!NOTE]
+> The notification area uses undocumented Windows behavior, tested on Windows 11 build 26300. Apps that ignore the `TaskbarCreated` message show their icon in the dock only after they next update it. Windows does not allow Wisp to send clicks to apps that run as administrator.
 
 ## Install
 
@@ -161,6 +188,9 @@ hotkey = "Alt+Space"        # examples: "Ctrl+Shift+Space", "Win+Alt+W", "Ctrl+F
 max_results = 8             # results visible at once; scroll to see more
 theme = "system"            # "system" | "dark" | "light"
 backdrop = "acrylic"        # "acrylic" | "mica" | "solid"
+position = "center"         # "center" | "bottom": the search box at the bottom of the screen, results above it
+dock = false                # show the dock (see Dock)
+hide_taskbar = false        # hide the Windows taskbar while Wisp runs
 show_recent = true          # recently launched apps when the search box is empty
 search_url = "https://www.google.com/search?q={query}"
 file_search = true          # search the Windows Search index; prefix a query with ? for files only
@@ -184,6 +214,26 @@ The first build of the settings app takes several minutes, because it compiles t
 
 Debug builds of the launcher keep a console window open for logs. Release builds run without one.
 
+### Nightly builds
+
+A nightly build installs beside a stable install and does not change it. It has its own folder, config, shortcut and **Start with Windows** entry. Its settings app does not check for updates.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-nightly.ps1
+```
+
+The script builds with the `nightly` feature, installs to `%LOCALAPPDATA%\Programs\Wisp Nightly` and starts it. The config is `%APPDATA%\wisp-nightly\config.toml`. On the first install, the script copies your stable config and turns on the dock. It sets the nightly shortcut to <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd>, so that it does not conflict with stable Wisp. Run `"%LOCALAPPDATA%\Programs\Wisp Nightly\wisp.exe" --quit` to stop it.
+
+### Performance measurements
+
+`scripts\measure-perf.ps1` builds nothing. It runs `target\release\examples\launcher_demo.exe` and writes timings to `target\perf`. Build the demo first:
+
+```sh
+cargo build --release --example launcher_demo --features nightly,perf-trace
+```
+
+`scripts\summarize-perf.py` turns the timings into a table. Without the `perf-trace` feature, the timing calls compile to nothing.
+
 ## How it works
 
 | File | What it does |
@@ -198,6 +248,13 @@ Debug builds of the launcher keep a console window open for logs. Release builds
 | [`src/editor.rs`](src/editor.rs) | Text editing for the search box |
 | [`src/launch.rs`](src/launch.rs) | Opens apps and URLs and runs commands through the Windows shell |
 | [`src/tray.rs`](src/tray.rs) | Tray icon, menu and notifications |
+| [`src/surface/`](src/surface) | Surfaces: reads the TOML specs and builds their widgets |
+| [`src/dock.rs`](src/dock.rs), [`src/dock/`](src/dock) | The dock: running apps, volume, battery, clock, notification icons, auto-hide and slide animation |
+| [`src/morph.rs`](src/morph.rs) | Geometry of the change from the dock to the launcher |
+| [`src/taskbar.rs`](src/taskbar.rs), [`src/taskbar/`](src/taskbar) | Hides and restores the Windows taskbar, with a watchdog process |
+| [`src/tray_host.rs`](src/tray_host.rs), [`src/tray_host/`](src/tray_host) | Receives notification icons for the dock and forwards them to Explorer |
+| [`src/channel.rs`](src/channel.rs) | Names, folders and the mutex for the stable and nightly builds |
+| [`src/perf.rs`](src/perf.rs) | Timing traces for the `perf-trace` feature |
 | [`src/config.rs`](src/config.rs), [`src/history.rs`](src/history.rs) | Config and launch history |
 | [`settings/`](settings) | The settings app: onboarding and a settings window, built with [GPUI](https://www.gpui.rs) and [GPUI Component](https://github.com/longbridge/gpui-component) |
 
@@ -206,7 +263,11 @@ Debug builds of the launcher keep a console window open for logs. Release builds
 - **Commands never block typing.** A worker thread reads Wi-Fi, Bluetooth, audio, media and window state each time the launcher opens, and runs commands. The launcher builds command results from the last state it received. Wi-Fi and Bluetooth use `Windows.Devices.Radios`, which works from desktop apps. Listing nearby Wi-Fi networks needs location access since Windows 11 24H2; without it, Wisp lists saved networks. Switching the output device uses the undocumented `IPolicyConfig` interface, as Sound settings does.
 - **Direct2D uses software rendering.** At this window size, a frame takes about 1 ms of CPU time. Avoiding the GPU driver saves about 30 MB of private memory.
 - **The launcher window keeps its caption style but removes the visible frame** (`WM_NCCALCSIZE`). DWM needs the frame style to render acrylic. A borderless popup gets a flat grey backdrop.
-- **The launcher keeps a fixed height while results are present.** Resizing a window with an acrylic or mica backdrop makes DWM recalculate the blur. It takes about 250 ms to settle. At a fixed height, each keystroke needs one repaint.
+- **The launcher keeps a fixed height while results are present.** Resizing a window with an acrylic or mica backdrop makes DWM recalculate the blur. It takes about 250 ms to settle. At a fixed height, each keystroke needs one repaint. With the dock, the launcher is as tall as its results instead.
+- **The dock and the launcher share one window.** During the change between them, Wisp draws a solid color and turns the blur back on at the end. Frames are timed to the display's refresh with `DwmFlush`. In the release build, each frame takes at most 8 ms to draw, at 100% and 125% scaling.
+- **The dock uses a different blur from the launcher.** DWM draws its system backdrops as a solid color in windows that are not active, and the dock never becomes active. The dock uses the acrylic accent of `SetWindowCompositionAttribute`, an undocumented API that stays blurred.
+- **The dock receives notification icons through an invisible `Shell_TrayWnd` window.** Apps find the tray with `FindWindow("Shell_TrayWnd")`. Wisp's window is above Explorer's, so apps find Wisp's window first. Wisp copies each icon and forwards the original message to Explorer. When Wisp starts, it sends `TaskbarCreated`, so running apps add their icons again.
+- **The hidden dock uses almost no CPU.** It checks the pointer position 10 times a second. It ignores changes to other windows until it slides up.
 
 ## Contributing
 

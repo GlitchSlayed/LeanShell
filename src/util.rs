@@ -1,3 +1,6 @@
+#[path = "perf.rs"]
+pub mod perf;
+
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -9,7 +12,7 @@ pub fn data_dir() -> PathBuf {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    let dir = base.join("wisp");
+    let dir = base.join(crate::channel::DATA_DIR);
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

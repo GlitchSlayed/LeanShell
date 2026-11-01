@@ -10,7 +10,7 @@ use windows::Win32::System::Registry::*;
 use windows::core::{Error, PCWSTR, Result, w};
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-const RUN_VALUE: PCWSTR = w!("Wisp");
+const RUN_VALUE: PCWSTR = crate::channel::RUN_VALUE;
 
 pub fn set_clipboard(hwnd: HWND, text: &str) -> Result<()> {
     let data: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();

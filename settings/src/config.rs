@@ -91,7 +91,7 @@ pub fn validate_url(value: &str) -> Result<(), String> {
 
 pub fn path() -> Result<PathBuf, String> {
     std::env::var_os("APPDATA")
-        .map(|root| PathBuf::from(root).join("wisp/config.toml"))
+        .map(|root| PathBuf::from(root).join(crate::channel::DATA_DIR).join("config.toml"))
         .ok_or_else(|| "Windows did not provide the AppData folder.".into())
 }
 
