@@ -1,8 +1,5 @@
 //! Native taskbar snapshot, event-driven suppression and recovery.
 
-// Public integration API is used when the launcher wiring lands.
-#![allow(dead_code)]
-
 use std::marker::PhantomData;
 use std::process::{Child, Command};
 use std::rc::Rc;
@@ -223,25 +220,6 @@ fn primary_work() -> Result<Rect> {
     Ok(rect.into())
 }
 
-pub fn print_status(label: &str) -> Result<()> {
-    println!(
-        "{label}: ABM_GETSTATE={} autohide={}",
-        appbar_state(),
-        appbar_state() & state::AUTOHIDE != 0
-    );
-    println!("  SPI_GETWORKAREA={:?}", primary_work()?);
-    for bar in bars()? {
-        println!(
-            "  {} hwnd={:#x} visible={} rect={:?}",
-            bar.class, bar.hwnd, bar.visible, bar.rect
-        );
-    }
-    for monitor in monitors()? {
-        println!("  monitor={:?} rcWork={:?}", monitor.bounds, monitor.work);
-    }
-    Ok(())
-}
-
 fn restore_areas(areas: &[(Rect, Rect)]) -> Result<()> {
     let current = monitors()?;
     let mut error = None;
@@ -300,20 +278,6 @@ fn restore_snapshot(snapshot: &Snapshot) -> Result<()> {
             });
         if prior.map(|b| b.visible).unwrap_or(true) != bar.visible {
             error = Some(failure("Restored taskbar visibility did not match its snapshot"));
-        }
-    }
-    if let Some(error) = error { Err(error) } else { Ok(()) }
-}
-
-/// Emergency repair intentionally makes every current taskbar visible-capable.
-pub fn force_restore(autohide: Option<bool>) -> Result<()> {
-    let mut error = None;
-    if autohide.is_some() {
-        error = set_state(state::autohide_state(appbar_state(), autohide)).err();
-    }
-    for bar in bars()? {
-        unsafe {
-            let _ = ShowWindow(HWND(bar.hwnd as _), SW_SHOW);
         }
     }
     if let Some(error) = error { Err(error) } else { Ok(()) }

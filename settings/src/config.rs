@@ -17,6 +17,9 @@ pub struct Config {
     pub search_url: String,
     pub file_search: bool,
     pub file_search_exclude: Vec<String>,
+    pub position: String,
+    pub dock: bool,
+    pub hide_taskbar: bool,
 }
 
 impl Default for Config {
@@ -44,6 +47,8 @@ impl Config {
         choice(&theme, &["system", "dark", "light"], "theme")?;
         let backdrop = string("backdrop")?;
         choice(&backdrop, &["acrylic", "mica", "solid"], "backdrop")?;
+        let position = string("position")?;
+        choice(&position, &["center", "bottom"], "position")?;
         let max_results = get("max_results")
             .as_integer()
             .filter(|value| *value >= 0)
@@ -69,6 +74,9 @@ impl Config {
             search_url: string("search_url")?,
             file_search: boolean("file_search")?,
             file_search_exclude,
+            position,
+            dock: boolean("dock")?,
+            hide_taskbar: boolean("hide_taskbar")?,
         })
     }
 }
@@ -178,7 +186,18 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         "max_results" if !value.as_integer().is_some_and(|value| (1..=20).contains(&value)) => {
             return Err("Choose between 1 and 20 results.".into());
         }
-        "theme" | "backdrop" | "max_results" | "show_recent" | "file_search" | "file_search_exclude" => {}
+        "position" if !matches!(value.as_str(), Some("center" | "bottom")) => {
+            return Err("position must be center or bottom.".into());
+        }
+        "theme"
+        | "backdrop"
+        | "max_results"
+        | "show_recent"
+        | "file_search"
+        | "file_search_exclude"
+        | "position"
+        | "dock"
+        | "hide_taskbar" => {}
         _ => return Err(format!("Unknown setting: {key}")),
     }
     Ok(())
@@ -197,6 +216,8 @@ mod tests {
         assert_eq!(config.backdrop, "acrylic");
         assert!(config.show_recent && config.file_search);
         assert_eq!(config.file_search_exclude.len(), 14);
+        assert_eq!(config.position, "bottom");
+        assert!(config.dock && config.hide_taskbar);
         assert_eq!(Config::from_document(&DocumentMut::new()).unwrap(), config);
     }
 

@@ -14,14 +14,6 @@ pub fn hidden_state(previous: u32) -> u32 {
     previous | AUTOHIDE
 }
 
-pub fn autohide_state(previous: u32, enabled: Option<bool>) -> u32 {
-    match enabled {
-        Some(true) => previous | AUTOHIDE,
-        Some(false) => previous & !AUTOHIDE,
-        None => previous,
-    }
-}
-
 /// Reclaim only a strip attributable to this taskbar; retain other appbars.
 pub fn reclaimed_work(monitor: Rect, work: Rect, bar: Rect) -> Rect {
     let mut target = work;
@@ -53,9 +45,6 @@ mod tests {
     fn preserves_other_state_bits() {
         for state in 0..8 {
             assert_eq!(hidden_state(state), state | 1);
-            assert_eq!(autohide_state(state, None), state);
-            assert_eq!(autohide_state(state, Some(false)), state & !1);
-            assert_eq!(autohide_state(state, Some(true)), state | 1);
         }
     }
 

@@ -272,41 +272,40 @@ pub fn run() -> Result<()> {
         LAUNCHER.with(|cell| *cell.borrow_mut() = Some(launcher));
         with_launcher(|l| {
             l.start();
-            if std::env::var_os("WISP_CAPTURE").is_some() {
-                if std::env::var("WISP_CAPTURE_SCENARIO").as_deref() != Ok("hidden")
+            if crate::util::perf::hook_on("WISP_CAPTURE") {
+                if crate::util::perf::hook("WISP_CAPTURE_SCENARIO").as_deref() != Some("hidden")
                     && let Some(dock) = &mut l.dock
                 {
                     dock.hold(
                         None,
                         None,
-                        std::env::var("DOCK_DEMO_DPI").ok().and_then(|s| s.parse().ok()),
+                        crate::util::perf::hook("DOCK_DEMO_DPI").and_then(|s| s.parse().ok()),
                     );
                 }
-                if let Ok(query) = std::env::var("WISP_CAPTURE_QUERY") {
+                if let Some(query) = crate::util::perf::hook("WISP_CAPTURE_QUERY") {
                     l.editor.insert(&query);
                 }
                 SetTimer(
                     Some(l.hwnd),
                     99,
-                    std::env::var("WISP_CAPTURE_DURATION_MS")
-                        .ok()
+                    crate::util::perf::hook("WISP_CAPTURE_DURATION_MS")
                         .and_then(|s| s.parse().ok())
                         .unwrap_or(3500),
                     None,
                 );
                 #[cfg(feature = "perf-trace")]
-                if let Ok(scenario) = std::env::var("WISP_PERF_SCENARIO") {
-                    if scenario.ends_with("hidden") {
-                        if let Some(dock) = &mut l.dock {
-                            dock.hide();
-                            dock.show();
-                        }
+                if let Some(scenario) = crate::util::perf::hook("WISP_PERF_SCENARIO") {
+                    if scenario.ends_with("hidden")
+                        && let Some(dock) = &mut l.dock
+                    {
+                        dock.hide();
+                        dock.show();
                     }
                     if !scenario.starts_with("idle") {
                         SetTimer(Some(l.hwnd), 97, 250, None);
                     }
                 }
-                if std::env::var_os("WISP_CAPTURE_SCENARIO").is_some() {
+                if crate::util::perf::hook_on("WISP_CAPTURE_SCENARIO") {
                     SetTimer(Some(l.hwnd), 98, 45, None);
                 }
             }
@@ -479,7 +478,7 @@ impl Launcher {
         }
         // Windows needs the tray icon before it can show notifications.
         tray::add(self.hwnd, self.tray_icon, &self.tooltip());
-        if std::env::var_os("WISP_CAPTURE").is_none() {
+        if !crate::util::perf::hook_on("WISP_CAPTURE") {
             self.register_hotkey(true);
         }
         self.indexer.rescan();
@@ -663,7 +662,7 @@ impl Launcher {
         let _span = util::perf::Span::new("show");
         util::perf::input("show_to_content");
         self.reload_config_if_changed();
-        if std::env::var_os("WISP_CAPTURE").is_none() {
+        if !crate::util::perf::hook_on("WISP_CAPTURE") {
             self.register_hotkey(false);
         }
         self.commands.refresh();
@@ -722,13 +721,13 @@ impl Launcher {
         unsafe {
             let _ = ShowWindow(
                 self.hwnd,
-                if std::env::var_os("WISP_CAPTURE").is_some() {
+                if crate::util::perf::hook_on("WISP_CAPTURE") {
                     SW_SHOWNOACTIVATE
                 } else {
                     SW_SHOW
                 },
             );
-            if std::env::var_os("WISP_CAPTURE").is_none() {
+            if !crate::util::perf::hook_on("WISP_CAPTURE") {
                 let _ = SetForegroundWindow(self.hwnd);
                 let _ = SetFocus(Some(self.hwnd));
             }
@@ -792,8 +791,7 @@ impl Launcher {
             let (mut dpi_x, mut dpi_y) = (96, 96);
             let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
             self.set_dpi(
-                std::env::var("DOCK_DEMO_DPI")
-                    .ok()
+                crate::util::perf::hook("DOCK_DEMO_DPI")
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(dpi_x),
             );
@@ -977,8 +975,8 @@ impl Launcher {
     }
 
     fn morph_progress(&self, morph: &Morph) -> f32 {
-        if std::env::var_os("WISP_CAPTURE").is_some()
-            && let Ok(value) = std::env::var("WISP_CAPTURE_MORPH")
+        if crate::util::perf::hook_on("WISP_CAPTURE")
+            && let Some(value) = crate::util::perf::hook("WISP_CAPTURE_MORPH")
             && let Ok(value) = value.parse::<f32>()
         {
             return value.clamp(0.0, 1.0);
@@ -1026,8 +1024,8 @@ impl Launcher {
         let opening = morph.opening;
         let from = morph.from;
         let to = morph.to;
-        if std::env::var_os("WISP_CAPTURE").is_some()
-            && std::env::var("WISP_CAPTURE_SCENARIO").as_deref() == Ok("typing")
+        if crate::util::perf::hook_on("WISP_CAPTURE")
+            && crate::util::perf::hook("WISP_CAPTURE_SCENARIO").as_deref() == Some("typing")
             && opening
             && self.editor.text() != "typed"
         {
@@ -1050,7 +1048,7 @@ impl Launcher {
                 }
             }
         }
-        if std::env::var_os("WISP_FRAME_TIMING").is_some() {
+        if crate::util::perf::hook_on("WISP_FRAME_TIMING") {
             eprintln!(
                 "morph frame timestamp_ms={elapsed:.3} work_ms={:.3}",
                 tick.elapsed().as_secs_f64() * 1000.0
@@ -1152,8 +1150,8 @@ impl Launcher {
         self.results.extend(self.file_results.iter().cloned());
         self.results.extend(base[web..].iter().cloned());
         self.base_results = base;
-        if std::env::var_os("WISP_CAPTURE").is_some()
-            && let Ok(rows) = std::env::var("WISP_CAPTURE_ROWS")
+        if crate::util::perf::hook_on("WISP_CAPTURE")
+            && let Some(rows) = crate::util::perf::hook("WISP_CAPTURE_ROWS")
             && let Ok(rows) = rows.parse::<usize>()
         {
             self.results.truncate(rows);
@@ -2091,7 +2089,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_launcher(Launcher::show);
         }
         #[cfg(feature = "perf-trace")]
-        WM_TIMER if wparam.0 == 97 && std::env::var_os("WISP_CAPTURE").is_some() => {
+        WM_TIMER if wparam.0 == 97 && crate::util::perf::hook_on("WISP_CAPTURE") => {
             with_launcher(|l| {
                 thread_local! { static STEP: Cell<usize> = const { Cell::new(0) }; }
                 let step = STEP.with(|s| {
@@ -2099,13 +2097,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     s.set(n + 1);
                     n
                 });
-                let scenario = std::env::var("WISP_PERF_SCENARIO").unwrap_or_default();
+                let scenario = crate::util::perf::hook("WISP_PERF_SCENARIO").unwrap_or_default();
                 if scenario == "typing" {
                     if !l.visible {
                         l.show();
                     }
                     util::perf::input("key_to_content");
-                    l.on_char(if step % 6 == 0 { 8 } else { 101 });
+                    l.on_char(if step.is_multiple_of(6) { 8 } else { 101 });
                     l.paint();
                 } else if scenario == "slide" {
                     if let Some(dock) = &mut l.dock {
@@ -2115,10 +2113,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if l.visible {
                         l.hide();
                     } else {
-                        if scenario == "hidden" {
-                            if let Some(dock) = &mut l.dock {
-                                dock.hide();
-                            }
+                        if scenario == "hidden"
+                            && let Some(dock) = &mut l.dock
+                        {
+                            dock.hide();
                         }
                         util::perf::input("hotkey_to_content");
                         l.show();
@@ -2126,12 +2124,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             });
         }
-        WM_TIMER if wparam.0 == 98 && std::env::var_os("WISP_CAPTURE").is_some() => {
+        WM_TIMER if wparam.0 == 98 && crate::util::perf::hook_on("WISP_CAPTURE") => {
             with_launcher(|l| {
                 unsafe {
                     let _ = KillTimer(Some(l.hwnd), 98);
                 }
-                let scenario = std::env::var("WISP_CAPTURE_SCENARIO").unwrap_or_default();
+                let scenario = crate::util::perf::hook("WISP_CAPTURE_SCENARIO").unwrap_or_default();
                 eprintln!(
                     "scenario={scenario} visible={} morph={} return_to_dock={}",
                     l.visible,
@@ -2155,7 +2153,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             });
         }
-        WM_TIMER if wparam.0 == 99 && std::env::var_os("WISP_CAPTURE").is_some() => unsafe {
+        WM_TIMER if wparam.0 == 99 && crate::util::perf::hook_on("WISP_CAPTURE") => unsafe {
             let _ = DestroyWindow(hwnd);
         },
         WM_APP_QUIT => unsafe {

@@ -338,7 +338,6 @@ impl Dock {
         self.state.borrow_mut().frame_paced = true;
     }
 
-    #[allow(dead_code)]
     pub fn capture_slide(&mut self) {
         let mut s = self.state.borrow_mut();
         let to = if s.slide_to > 0.5 { 0.0 } else { 1.0 };
@@ -467,7 +466,6 @@ impl Dock {
     }
     /// Reveals the dock for good, with a fixed hover, so screenshots can show it
     /// without moving the pointer.
-    #[allow(dead_code)] // Used by the isolated dock demo.
     pub fn hold(&mut self, hover: Option<usize>, hover_part: Option<&str>, dpi: Option<u32>) {
         let mut s = self.state.borrow_mut();
         s.held = true;
@@ -495,43 +493,6 @@ impl Dock {
         s.place();
         s.sync_tray();
     }
-    /// The notification icons the dock shows: tooltip, owner and whether
-    /// it sits in the dock itself. For the demo's checks.
-    #[allow(dead_code)] // Used by the isolated dock demo.
-    pub fn tray_summary(&self) -> Vec<(String, String, bool)> {
-        let s = self.state.borrow();
-        s.tray
-            .iter()
-            .enumerate()
-            .map(|(index, shown)| {
-                let exe = shown.icon.exes.first().cloned().unwrap_or_default();
-                (shown.icon.tip.clone(), exe, s.inline.contains(&index))
-            })
-            .collect()
-    }
-
-    /// Uses the first notification icon whose tooltip contains `tip`, through
-    /// the same path as the pointer. For the demo's checks.
-    #[allow(dead_code)] // Used by the isolated dock demo.
-    pub fn use_tray_icon(&mut self, tip: &str, action: Action) -> bool {
-        let mut s = self.state.borrow_mut();
-        let Some(index) = s.tray.iter().position(|shown| shown.icon.tip.contains(tip)) else {
-            return false;
-        };
-        match s.inline.iter().position(|&i| i == index) {
-            Some(position) => s.click_inline(position, action),
-            None => {
-                let rect = s.cell_rect(index);
-                let center = POINT {
-                    x: (rect.left + rect.right) / 2,
-                    y: (rect.top + rect.bottom) / 2,
-                };
-                s.click_tray(index, action, center);
-            }
-        }
-        true
-    }
-
     /// Hides the dock until `show`, such as while the launcher is open.
     pub fn hide(&mut self) {
         let mut s = self.state.borrow_mut();
@@ -838,7 +799,7 @@ impl State {
                 }
             }
         }
-        if std::env::var_os("WISP_FRAME_TIMING").is_some() {
+        if crate::util::perf::hook_on("WISP_FRAME_TIMING") {
             eprintln!(
                 "slide frame timestamp_ms={elapsed:.3} work_ms={:.3}",
                 tick.elapsed().as_secs_f64() * 1000.0

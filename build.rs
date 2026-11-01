@@ -9,7 +9,7 @@ fn main() {
         res.set_icon_with_id("assets/wisp.ico", "1");
         res.set(
             "FileDescription",
-            &format!("Wisp launcher{}", if nightly { " (Nightly)" } else { "" }),
+            &format!("Wisp{}", if nightly { " (Nightly)" } else { "" }),
         );
         res.set("ProductName", if nightly { "Wisp Nightly" } else { "Wisp" });
         res.set("LegalCopyright", "Copyright (c) 2026 Sumir Seth. MIT License.");

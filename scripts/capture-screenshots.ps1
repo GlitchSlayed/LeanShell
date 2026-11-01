@@ -1,5 +1,9 @@
-param([string]$Prefix = 'ux4', [string]$Demo = 'target\debug\examples\launcher_demo.exe', [string]$Phase = 'before', [string[]]$Themes = @('dark','light'), [int[]]$Dpis = @(96,120), [string[]]$States = @('dock','launcher'))
+# Captures the dock and the launcher over a bright test pattern into target\shots.
+# Run from the repository root after:
+#   cargo build --release --example launcher_demo --features perf-trace
+param([string]$Prefix = 'shot', [string]$Demo = 'target\release\examples\launcher_demo.exe', [string]$Phase = 'now', [string[]]$Themes = @('dark','light'), [int[]]$Dpis = @(96,120), [string[]]$States = @('dock','launcher'), [ValidateSet('pattern','wallpaper')][string]$Backdrop = 'pattern')
 $ErrorActionPreference = 'Stop'
+New-Item -ItemType Directory -Force 'target\shots' | Out-Null
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 Add-Type -ReferencedAssemblies System.Windows.Forms @'
 using System;
@@ -16,6 +20,18 @@ $screen = [Windows.Forms.Screen]::PrimaryScreen.Bounds
 $form.Bounds = New-Object Drawing.Rectangle($screen.Left,($screen.Bottom-700),$screen.Width,700)
 $form.TopMost = $true
 $form.add_Paint({param($sender,$e)
+ if ($Backdrop -eq 'wallpaper') {
+  # Soft diagonal gradients, as on a desktop wallpaper, for README images.
+  $area = New-Object Drawing.Rectangle(0,0,$sender.Width,700)
+  $b = New-Object Drawing.Drawing2D.LinearGradientBrush($area,[Drawing.ColorTranslator]::FromHtml('#1b2a6b'),[Drawing.ColorTranslator]::FromHtml('#c2577a'),20.0)
+  $blend = New-Object Drawing.Drawing2D.ColorBlend(3)
+  $blend.Colors = @([Drawing.ColorTranslator]::FromHtml('#14204f'),[Drawing.ColorTranslator]::FromHtml('#5b3f9e'),[Drawing.ColorTranslator]::FromHtml('#e08a6b'))
+  $blend.Positions = @(0.0,0.55,1.0)
+  $b.InterpolationColors = $blend
+  $e.Graphics.FillRectangle($b,$area); $b.Dispose()
+  return
+ }
+ # A bright pattern shows how much the acrylic blur lets through.
  $colors = @('#ff345c','#ffd731','#25dfbe','#35a8ff','#ae67ff')
  for($x=0;$x -lt $sender.Width;$x+=80) { for($y=0;$y -lt 700;$y+=80) {
   $b=New-Object Drawing.SolidBrush([Drawing.ColorTranslator]::FromHtml($colors[(($x/80)+($y/80))%5])); $e.Graphics.FillRectangle($b,$x,$y,80,80); $b.Dispose()

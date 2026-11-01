@@ -613,6 +613,47 @@ impl Settings {
                 ),
             )
             .child(div().h_3())
+            .child(label("Dock", p))
+            .child(
+                group(p)
+                    .child(row(
+                        "Dock",
+                        "Show running apps, notification icons, volume, battery and the clock at the bottom of the screen.",
+                        Switch::new("dock")
+                            .checked(self.config.dock)
+                            .accessibility_label("Dock")
+                            .on_change(cx.listener(|this, enabled: &bool, window, cx| {
+                                this.save("dock", (*enabled).into(), window, cx);
+                            })),
+                        p,
+                    ))
+                    .child(divider(p))
+                    .child(row(
+                        "Hide the taskbar",
+                        "Hide the Windows taskbar while Wisp runs. The taskbar comes back when Wisp quits.",
+                        Switch::new("hide-taskbar")
+                            .checked(self.config.hide_taskbar)
+                            .accessibility_label("Hide the taskbar")
+                            .on_change(cx.listener(|this, enabled: &bool, window, cx| {
+                                this.save("hide_taskbar", (*enabled).into(), window, cx);
+                            })),
+                        p,
+                    ))
+                    .child(divider(p))
+                    .child(row(
+                        "Launcher at the bottom",
+                        "Open the launcher at the bottom of the screen. With the dock, the dock grows into the launcher.",
+                        Switch::new("position-bottom")
+                            .checked(self.config.position == "bottom")
+                            .accessibility_label("Launcher at the bottom")
+                            .on_change(cx.listener(|this, enabled: &bool, window, cx| {
+                                let position = if *enabled { "bottom" } else { "center" };
+                                this.save("position", position.into(), window, cx);
+                            })),
+                        p,
+                    )),
+            )
+            .child(div().h_3())
             .child(label("Startup", p))
             .child(group(p).child(row(
                 "Start with Windows",
@@ -874,7 +915,9 @@ impl Settings {
                 "Welcome to Wisp",
                 v_flex()
                     .gap_4()
-                    .child("Press the shortcut, type a few letters of an app or file, and press Enter.")
+                    .child(
+                        "Move the pointer to the bottom edge of the screen to see the dock. Press the shortcut, type a few letters of an app or file, and press Enter.",
+                    )
                     .child(shortcut),
             ),
             1 => (
@@ -901,7 +944,7 @@ impl Settings {
                         p,
                     )))
                     .child(hint(
-                        "To change settings later, right-click the Wisp icon in the notification area and select Settings.",
+                        "To change settings later, right-click the Wisp icon in the notification area and select Settings. With the dock, the icon is behind the ⌄ button.",
                         p,
                     )),
             ),

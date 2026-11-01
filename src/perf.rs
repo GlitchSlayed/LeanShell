@@ -1,4 +1,5 @@
-//! Optional buffered QPC tracing. No clocks, buffers or environment reads without perf-trace.
+//! Optional buffered QPC tracing and test hooks. Without perf-trace, there are
+//! no clocks, buffers or environment reads, and the hooks compile away.
 #[cfg(feature = "perf-trace")]
 mod enabled {
     use std::cell::RefCell;
@@ -71,6 +72,13 @@ mod enabled {
             }
         });
     }
+    /// A test-harness setting from the environment.
+    pub fn hook(name: &str) -> Option<String> {
+        std::env::var(name).ok()
+    }
+    pub fn hook_on(name: &str) -> bool {
+        std::env::var_os(name).is_some()
+    }
     pub fn present() {
         let now = ticks();
         TRACE.with(|t| {
@@ -106,6 +114,14 @@ mod disabled {
     pub fn input(_: &'static str) {}
     #[inline(always)]
     pub fn present() {}
+    #[inline(always)]
+    pub fn hook(_: &str) -> Option<String> {
+        None
+    }
+    #[inline(always)]
+    pub fn hook_on(_: &str) -> bool {
+        false
+    }
 }
 #[cfg(not(feature = "perf-trace"))]
 pub use disabled::*;

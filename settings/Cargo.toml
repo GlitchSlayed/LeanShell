@@ -2,7 +2,7 @@
 name = "wisp-settings"
 version = "0.4.0"
 edition = "2024"
-description = "Settings and onboarding for the Wisp launcher"
+description = "Settings and onboarding for Wisp"
 license = "MIT"
 publish = false
 
