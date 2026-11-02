@@ -1,5 +1,7 @@
 //! Independent, nonactivating app dock on the message-loop thread.
 
+#[path = "dock/desktops.rs"]
+mod desktops;
 #[path = "dock/logic.rs"]
 mod logic;
 #[path = "dock/render.rs"]
@@ -25,8 +27,8 @@ use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, GetDoubleClickTime, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_ESCAPE, VK_LBUTTON,
-    VK_RBUTTON,
+    GetAsyncKeyState, GetDoubleClickTime, GetKeyState, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_ESCAPE,
+    VK_LBUTTON, VK_RBUTTON, VK_SHIFT,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -63,6 +65,11 @@ const SLIDE_TIMER: usize = 103;
 const SLIDE_MS: f32 = 180.0;
 const HOVER_TIMER: usize = 105;
 const HOVER_MS: f32 = 110.0;
+/// Hides the desktop pill after a scroll.
+const DESKTOP_TIMER: usize = 106;
+const DESKTOP_PILL_MS: u32 = 1100;
+/// Wheel input right after a switch is the same flick, not another request.
+const DESKTOP_PAUSE: Duration = Duration::from_millis(300);
 thread_local! { static EVENT_TARGET: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) }; }
 
 struct Item {
@@ -106,6 +113,11 @@ struct State {
     hover_tick: Option<Instant>,
     /// Wheel delta over the volume not yet spent on a whole percent.
     wheel: i32,
+    /// Wheel travel toward the next desktop switch, and when the last one happened.
+    desktop_travel: i32,
+    desktop_switched: Option<Instant>,
+    /// The desktops the pill above the dock shows, while it shows.
+    desktop_pill: Option<desktops::Desktops>,
     /// The dock's left edge on screen, in physical pixels.
     left: i32,
     width: i32,
@@ -183,6 +195,9 @@ impl Dock {
             hover_levels: Vec::new(),
             hover_tick: None,
             wheel: 0,
+            desktop_travel: 0,
+            desktop_switched: None,
+            desktop_pill: None,
             left: 0,
             width: 0,
             surface_rect: None,
@@ -291,6 +306,8 @@ impl Dock {
             (EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE),
             (EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE),
             (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+            // Windows on other desktops are cloaked, so switching desktops changes the apps.
+            (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
         ] {
             let hook = unsafe {
                 SetWinEventHook(
@@ -326,7 +343,7 @@ impl Dock {
     }
 
     pub fn owns_message(msg: u32, wp: WPARAM) -> bool {
-        msg == WM_TIMER && (101..=105).contains(&wp.0) || matches!(msg, WM_REFRESH | WM_TRAY_CHANGED)
+        msg == WM_TIMER && (101..=106).contains(&wp.0) || matches!(msg, WM_REFRESH | WM_TRAY_CHANGED)
     }
 
     pub fn mostly_visible(&self) -> bool {
@@ -498,6 +515,9 @@ impl Dock {
         s.reveal();
         s.stop_slide();
         s.place();
+        if hover_part == Some("desktops") {
+            s.show_desktops(desktops::read());
+        }
         s.sync_tray();
     }
     /// Hides the dock until `show`, such as while the launcher is open.
@@ -527,6 +547,7 @@ impl Drop for Dock {
             let _ = KillTimer(Some(self.hwnd), SLIDE_TIMER);
             let _ = KillTimer(Some(self.hwnd), TIP_TIMER);
             let _ = KillTimer(Some(self.hwnd), HOVER_TIMER);
+            let _ = KillTimer(Some(self.hwnd), DESKTOP_TIMER);
             // Remove the pointer before synchronous destruction can reenter the wndproc.
             let s = self.state.borrow();
             for hwnd in [s.flyout, s.tip, self.hwnd] {
@@ -1004,7 +1025,9 @@ impl State {
         let stale = match self.tip_target {
             Some(tray::Tip::Inline(i)) => i >= self.inline.len(),
             Some(tray::Tip::Flyout(i)) => i >= self.tray.len(),
-            _ => self.tray_host.is_none(),
+            Some(tray::Tip::Chevron) => self.tray_host.is_none(),
+            // The desktop pill has nothing to do with the tray.
+            None => false,
         };
         if stale {
             self.hide_tip();
@@ -1169,7 +1192,9 @@ impl State {
 
     fn hide_tip(&mut self) {
         self.tip_target = None;
+        self.desktop_pill = None;
         unsafe {
+            let _ = KillTimer(Some(self.hwnd), DESKTOP_TIMER);
             let _ = KillTimer(Some(self.hwnd), TIP_TIMER);
             let _ = KillTimer(Some(self.hwnd), HOVER_TIMER);
             let _ = ShowWindow(self.tip, SW_HIDE);
@@ -1319,6 +1344,63 @@ impl State {
         };
         if let Err(error) = crate::launch::open(target) {
             eprintln!("Dock status: {error}");
+        }
+    }
+
+    /// Wheel `delta` over the dock switches desktops a notch at a time,
+    /// negative toward the right.
+    fn wheel_desktops(&mut self, delta: i32) {
+        if self.desktop_switched.is_some_and(|at| at.elapsed() < DESKTOP_PAUSE) {
+            self.desktop_travel = 0;
+            return;
+        }
+        let (step, travel) = logic::wheel_desktop(self.desktop_travel, delta);
+        self.desktop_travel = travel;
+        let Some(right) = step else { return };
+        // Explorer updates its list after the switch, so a showing pill knows better.
+        let mut desktops = self.desktop_pill.take().unwrap_or_else(desktops::read);
+        let target = if right {
+            desktops.current + 1
+        } else {
+            desktops.current.wrapping_sub(1)
+        };
+        // Like Windows, the ends don't wrap around. The pill still shows where you are.
+        if target < desktops.names.len() {
+            desktops::switch(right);
+            desktops.current = target;
+            self.desktop_switched = Some(Instant::now());
+        }
+        self.show_desktops(desktops);
+    }
+
+    /// Shows the desktops in a pill above the dock for a moment.
+    fn show_desktops(&mut self, desktops: desktops::Desktops) {
+        self.tip_target = None;
+        let name = &desktops.names[desktops.current];
+        let Ok((width, height)) = self.tip_renderer.measure_desktops(desktops.names.len(), name) else {
+            return;
+        };
+        let scale = self.dpi as f32 / 96.0;
+        let (width, height) = ((width * scale).ceil() as i32, (height * scale).ceil() as i32);
+        let gap = (6.0 * scale).round() as i32;
+        self.desktop_pill = Some(desktops);
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIP_TIMER);
+            let mut dock = RECT::default();
+            let _ = GetWindowRect(self.hwnd, &mut dock);
+            let _ = SetWindowPos(
+                self.tip,
+                Some(HWND_TOPMOST),
+                (dock.left + dock.right - width) / 2,
+                dock.top - gap - height,
+                width,
+                height,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+            let _ = InvalidateRect(Some(self.tip), None, false);
+            if !self.held {
+                SetTimer(Some(self.hwnd), DESKTOP_TIMER, DESKTOP_PILL_MS, None);
+            }
         }
     }
 
@@ -1493,6 +1575,8 @@ unsafe extern "system" fn window_event(
                 | EVENT_OBJECT_HIDE
                 | EVENT_OBJECT_NAMECHANGE
                 | EVENT_OBJECT_LOCATIONCHANGE
+                | EVENT_OBJECT_CLOAKED
+                | EVENT_OBJECT_UNCLOAKED
         ) || object != OBJID_WINDOW.0
             || child != 0
             || hwnd.is_invalid()
@@ -1562,6 +1646,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
                 WM_TIMER if wp.0 == TIP_TIMER => {
                     s.show_tip();
+                    return LRESULT(0);
+                }
+                WM_TIMER if wp.0 == DESKTOP_TIMER => {
+                    let _ = KillTimer(Some(hwnd), DESKTOP_TIMER);
+                    if s.desktop_pill.take().is_some() {
+                        let _ = ShowWindow(s.tip, SW_HIDE);
+                    }
                     return LRESULT(0);
                 }
                 WM_TRAY_CHANGED => {
@@ -1653,12 +1744,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         s.wheel_volume(delta.into());
                         return LRESULT(0);
                     }
+                    // Shift scrolls the apps when more run than fit.
+                    if GetKeyState(VK_SHIFT.0 as i32) >= 0 {
+                        s.wheel_desktops(delta.into());
+                        return LRESULT(0);
+                    }
                     s.scroll = if delta < 0 {
                         (s.scroll + 1).min(s.items.len().saturating_sub(s.capacity))
                     } else {
                         s.scroll.saturating_sub(1)
                     };
                     let _ = InvalidateRect(Some(hwnd), None, false);
+                    return LRESULT(0);
+                }
+                WM_MOUSEHWHEEL => {
+                    // Positive is a swipe toward the right.
+                    s.wheel_desktops(-i32::from((wp.0 >> 16) as i16));
                     return LRESULT(0);
                 }
                 WM_PAINT => {
@@ -1737,9 +1838,18 @@ unsafe extern "system" fn popup_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
                     flyout_renderer,
                     tip_renderer,
                     tip_text,
+                    desktop_pill,
                     ..
                 } = &mut *s;
-                let result = if tip {
+                let result = if let Some(pill) = desktop_pill.as_ref().filter(|_| tip) {
+                    tip_renderer.draw_desktops(
+                        hwnd,
+                        *dpi,
+                        palette,
+                        (pill.current, pill.names.len()),
+                        &pill.names[pill.current],
+                    )
+                } else if tip {
                     tip_renderer.draw_tip(hwnd, *dpi, palette, tip_text)
                 } else {
                     flyout_renderer.draw_flyout(

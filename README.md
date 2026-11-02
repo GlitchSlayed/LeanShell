@@ -33,6 +33,7 @@ Wisp is written in Rust with Win32 and Direct2D. It needs no .NET, web view or P
 - Shows your running apps. Click one to switch to it.
 - Holds your tray icons. Icons you pin in Windows sit in the dock. The rest are behind **⌄**.
 - Shows volume, battery and the clock. Scroll over the volume to change it. Click it to mute.
+- Scroll anywhere else on the dock to switch virtual desktops. A small pill shows which one you are on.
 - Hides when you move away. Stays hidden over full-screen apps.
 - Needs the real taskbar? Right-click **⌄** and choose **Show taskbar**.
 

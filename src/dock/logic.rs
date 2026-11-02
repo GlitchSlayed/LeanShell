@@ -159,6 +159,25 @@ pub fn wheel_volume(percent: u32, delta: i32) -> (u32, i32) {
     ((percent as i32 + steps).clamp(0, 100) as u32, delta % WHEEL_PER_PERCENT)
 }
 
+/// Wheel travel that switches one desktop: a mouse wheel's notch.
+pub const DESKTOP_NOTCH: i32 = 120;
+
+/// Adds wheel `delta` to the `travel` so far, negative toward the right.
+/// Returns whether to switch right or left once a notch is complete, and the
+/// travel left over. Turning the wheel back starts over.
+pub fn wheel_desktop(travel: i32, delta: i32) -> (Option<bool>, i32) {
+    let travel = if travel != 0 && (travel < 0) != (delta < 0) {
+        delta
+    } else {
+        travel + delta
+    };
+    if travel.abs() >= DESKTOP_NOTCH {
+        (Some(travel < 0), 0)
+    } else {
+        (None, travel)
+    }
+}
+
 fn normalize(path: &str) -> String {
     path.trim()
         .trim_matches('"')
@@ -233,6 +252,19 @@ mod tests {
         assert_eq!(wheel_volume(50, 40), (50, 40));
         assert_eq!(wheel_volume(50, 40 + 40), (51, 20));
         assert_eq!(wheel_volume(50, -70), (49, -10));
+    }
+    #[test]
+    fn wheel_switches_one_desktop_a_notch() {
+        // Down and touchpad swipes right go to the desktop on the right.
+        assert_eq!(wheel_desktop(0, -120), (Some(true), 0));
+        assert_eq!(wheel_desktop(0, 120), (Some(false), 0));
+        // A fast flick still switches only once.
+        assert_eq!(wheel_desktop(0, -480), (Some(true), 0));
+        // Precision touchpads send fractions of a notch, which add up.
+        assert_eq!(wheel_desktop(0, -50), (None, -50));
+        assert_eq!(wheel_desktop(-100, -50), (Some(true), 0));
+        // Turning back starts over.
+        assert_eq!(wheel_desktop(-100, 30), (None, 30));
     }
     #[test]
     fn floating_layout_and_hit_targets() {

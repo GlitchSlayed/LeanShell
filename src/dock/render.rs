@@ -197,6 +197,65 @@ impl Renderer {
         }
     }
 
+    /// Draws the desktop pill: a dot per desktop, the current one long, then its name.
+    pub fn draw_desktops(
+        &mut self,
+        hwnd: HWND,
+        dpi: u32,
+        palette: &Palette,
+        (current, count): (usize, usize),
+        name: &str,
+    ) -> Result<()> {
+        self.paint(hwnd, dpi, palette, |target, formats| {
+            background(target, palette);
+            let size = unsafe { target.rt.GetSize() };
+            let middle = size.height / 2.0;
+            let mut x = DESKTOP_PAD;
+            for index in 0..count {
+                let (width, color) = if index == current {
+                    (DESKTOP_DOT_CURRENT, palette.text)
+                } else {
+                    (
+                        DESKTOP_DOT,
+                        D2D1_COLOR_F {
+                            a: 0.35,
+                            ..palette.text
+                        },
+                    )
+                };
+                unsafe {
+                    target.brush.SetColor(&color);
+                    target.rt.FillRoundedRectangle(
+                        &rounded(
+                            rect(x, middle - DESKTOP_DOT / 2.0, x + width, middle + DESKTOP_DOT / 2.0),
+                            DESKTOP_DOT / 2.0,
+                        ),
+                        &target.brush,
+                    );
+                }
+                x += width + DESKTOP_GAP;
+            }
+            unsafe { target.brush.SetColor(&palette.text) };
+            let left = x - DESKTOP_GAP + DESKTOP_LABEL_GAP;
+            text(
+                &target.rt,
+                &target.brush,
+                &formats.tip,
+                name,
+                rect(left, TIP_PAD.1, size.width, size.height),
+            );
+            Ok(())
+        })
+    }
+
+    /// The desktop pill's window size in DIPs.
+    pub fn measure_desktops(&self, count: usize, name: &str) -> Result<(f32, f32)> {
+        let (label, height) = self.measure_tip(name, 1000.0)?;
+        let dots = count as f32 * (DESKTOP_DOT + DESKTOP_GAP) - DESKTOP_GAP + DESKTOP_DOT_CURRENT - DESKTOP_DOT;
+        let label = label - 2.0 * TIP_PAD.0;
+        Ok((2.0 * DESKTOP_PAD + dots + DESKTOP_LABEL_GAP + label, height))
+    }
+
     /// Sizes the target to the window, then draws with `f` between BeginDraw and EndDraw.
     fn paint(
         &mut self,
@@ -258,6 +317,12 @@ impl Renderer {
 
 /// A tooltip's text inset, in DIPs.
 const TIP_PAD: (f32, f32) = (8.0, 5.0);
+/// The desktop pill's dots and spacing, in DIPs.
+const DESKTOP_PAD: f32 = 10.0;
+const DESKTOP_DOT: f32 = 6.0;
+const DESKTOP_DOT_CURRENT: f32 = 16.0;
+const DESKTOP_GAP: f32 = 5.0;
+const DESKTOP_LABEL_GAP: f32 = 9.0;
 
 fn rect(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
     D2D_RECT_F {

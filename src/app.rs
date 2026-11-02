@@ -288,7 +288,7 @@ pub fn run() -> Result<()> {
                 {
                     dock.hold(
                         None,
-                        None,
+                        crate::util::perf::hook("WISP_CAPTURE_DOCK_PART").as_deref(),
                         crate::util::perf::hook("DOCK_DEMO_DPI").and_then(|s| s.parse().ok()),
                     );
                 }
@@ -2120,6 +2120,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 | WM_LBUTTONUP
                 | WM_RBUTTONUP
                 | WM_MOUSEWHEEL
+                | WM_MOUSEHWHEEL
         )
     {
         return LRESULT(0);
@@ -2140,6 +2141,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             | WM_MBUTTONUP
                             | WM_RBUTTONUP
                             | WM_MOUSEWHEEL
+                            | WM_MOUSEHWHEEL
                             | WM_NCACTIVATE
                     ))
     })
