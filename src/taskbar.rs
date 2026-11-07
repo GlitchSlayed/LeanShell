@@ -112,33 +112,41 @@ fn monitor_info(handle: HMONITOR) -> Result<MONITORINFO> {
     Ok(info)
 }
 
+/// Every top-level window of a taskbar class, Explorer's or not. Not
+/// EnumWindows: while Start or a taskbar flyout is open, Windows moves the
+/// taskbar into a z-order band that EnumWindows skips but FindWindowEx walks.
+pub fn taskbar_windows() -> Vec<HWND> {
+    let mut list = Vec::new();
+    for class in [w!("Shell_TrayWnd"), w!("Shell_SecondaryTrayWnd")] {
+        let mut after = None;
+        while let Ok(hwnd) = unsafe { FindWindowExW(None, after, class, None) } {
+            list.push(hwnd);
+            after = Some(hwnd);
+        }
+    }
+    list
+}
+
 fn bars() -> Result<Vec<Bar>> {
-    unsafe extern "system" fn callback(hwnd: HWND, data: LPARAM) -> BOOL {
-        if is_taskbar(hwnd) {
-            let mut pid = 0;
-            let mut rect = RECT::default();
-            unsafe {
-                GetWindowThreadProcessId(hwnd, Some(&mut pid));
-                if GetWindowRect(hwnd, &mut rect).is_ok()
-                    && let Ok(info) = monitor_info(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST))
-                {
-                    let list = &mut *(data.0 as *mut Vec<Bar>);
-                    list.push(Bar {
-                        hwnd: hwnd.0 as usize,
-                        pid,
-                        class: class_name(hwnd),
-                        visible: IsWindowVisible(hwnd).as_bool(),
-                        monitor: info.rcMonitor.into(),
-                        rect: rect.into(),
-                    });
-                }
+    let mut list = Vec::new();
+    for hwnd in taskbar_windows().into_iter().filter(|&hwnd| is_taskbar(hwnd)) {
+        let mut pid = 0;
+        let mut rect = RECT::default();
+        unsafe {
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if GetWindowRect(hwnd, &mut rect).is_ok()
+                && let Ok(info) = monitor_info(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST))
+            {
+                list.push(Bar {
+                    hwnd: hwnd.0 as usize,
+                    pid,
+                    class: class_name(hwnd),
+                    visible: IsWindowVisible(hwnd).as_bool(),
+                    monitor: info.rcMonitor.into(),
+                    rect: rect.into(),
+                });
             }
         }
-        BOOL(1)
-    }
-    let mut list: Vec<Bar> = Vec::new();
-    unsafe {
-        EnumWindows(Some(callback), LPARAM(&mut list as *mut _ as isize))?;
     }
     Ok(list)
 }
