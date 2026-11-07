@@ -4,7 +4,7 @@ Thanks for helping. Bug reports, fixes and features are all welcome.
 
 ## Building, not just coding
 
-> Building something has never been about writing code. When I say I built it, it means I have put effort, thought and intention behind every single thing, and got Claude to write the code because it writes better code than almost all humans.
+> Building something has never been about writing code. When I say I built it, it means I have put effort, thought and intention behind every single thing, and got Claude to write the code because it writes better code than almost all humans do.
 >
 > — Sumir Seth, maintainer
 
