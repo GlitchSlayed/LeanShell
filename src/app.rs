@@ -683,10 +683,12 @@ impl Launcher {
 
     /// Hides the taskbar again after Explorer or Windows shows it.
     fn on_taskbar_message(&mut self, msg: u32) {
-        if let Some(hider) = &mut self.taskbar
-            && let Err(e) = hider.on_message(msg)
-        {
-            self.taskbar_failed(&e);
+        let Some(hider) = &mut self.taskbar else { return };
+        match hider.on_message(msg) {
+            // A later failure gets its retries again.
+            Ok(true) => self.taskbar_failures = 0,
+            Ok(false) => {}
+            Err(e) => self.taskbar_failed(&e),
         }
     }
 
