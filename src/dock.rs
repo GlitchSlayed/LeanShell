@@ -1593,12 +1593,15 @@ fn fullscreen_foreground(dock: HWND) -> bool {
         {
             return false;
         }
-        // Maximized windows have resize borders outside the monitor; don't treat those as fullscreen.
-        !IsZoomed(hwnd).as_bool()
-            && rect.left <= info.rcMonitor.left
+        let covers = rect.left <= info.rcMonitor.left
             && rect.top <= info.rcMonitor.top
             && rect.right >= info.rcMonitor.right
-            && rect.bottom >= info.rcMonitor.bottom
+            && rect.bottom >= info.rcMonitor.bottom;
+        // Maximized windows have resize borders outside the monitor; don't
+        // treat those as fullscreen. Some apps go fullscreen from maximized,
+        // though: that shows when the window fills the monitor exactly while
+        // the work area, and so a plain maximize, stops short of it.
+        covers && (!IsZoomed(hwnd).as_bool() || (rect == info.rcMonitor && info.rcWork != info.rcMonitor))
     }
 }
 
