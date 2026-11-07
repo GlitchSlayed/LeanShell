@@ -623,16 +623,20 @@ impl Launcher {
     /// taskbar is hidden. A shown taskbar keeps its own space.
     fn sync_reserve(&mut self) {
         let hidden = self.taskbar.as_ref().is_some_and(TaskbarHider::is_active);
-        let height = self.dock.as_ref().filter(|_| hidden).map_or(0, Dock::reserved_height);
-        if height == 0 {
+        let wanted = hidden && self.dock.as_ref().is_some_and(Dock::stays_visible);
+        if !wanted {
             self.dock_space = None;
-        } else if let Some(space) = &mut self.dock_space {
-            space.set_height(height);
+        } else if let Some(space) = &self.dock_space {
+            // The taskbar hider may have just changed the work area.
+            space.check();
         } else {
-            match DockSpace::new(height) {
+            match DockSpace::new(dock::RESERVED_HEIGHT) {
                 Ok(space) => self.dock_space = Some(space),
                 Err(e) => eprintln!("could not keep space for the dock: {e}"),
             }
+        }
+        if let Some(hider) = &mut self.taskbar {
+            hider.keep_bottom(self.dock_space.is_some());
         }
     }
 
@@ -707,10 +711,6 @@ impl Launcher {
 
     /// Hides the taskbar again after Explorer or Windows shows it.
     fn on_taskbar_message(&mut self, msg: u32) {
-        // The primary screen's scale may have changed the dock's height.
-        if msg == WM_DISPLAYCHANGE {
-            self.sync_reserve();
-        }
         let Some(hider) = &mut self.taskbar else { return };
         match hider.on_message(msg) {
             // A later failure gets its retries again, but only once the
@@ -719,6 +719,9 @@ impl Launcher {
             Ok(_) => {}
             Err(e) => self.taskbar_failed(&e),
         }
+        // Explorer restarting or the hider reclaiming space can take the
+        // dock's space away.
+        self.sync_reserve();
     }
 
     fn update_dock_apps(&mut self) {
@@ -2121,11 +2124,12 @@ impl Launcher {
 
     fn shutdown(&mut self) {
         self.dock = None;
-        // Give the space back before the taskbar's snapshot restores the work area.
-        self.dock_space = None;
         if let Err(e) = TaskbarHider::configure(&mut self.taskbar, self.hwnd, false) {
             eprintln!("could not restore the taskbar: {e}");
         }
+        // Removed last, so Windows works the work area out again from the
+        // restored taskbar and the remaining app bars.
+        self.dock_space = None;
         unsafe {
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_ID);
         }

@@ -8,6 +8,10 @@ mod logic;
 mod render;
 #[path = "dock/space.rs"]
 pub mod space;
+
+/// The room a dock that stays visible keeps at the bottom of the primary
+/// screen, in DIPs: its height and the margins above and below it.
+pub const RESERVED_HEIGHT: f32 = logic::HEIGHT + 2.0 * logic::MARGIN;
 #[path = "dock/status.rs"]
 mod status;
 #[path = "dock/tray.rs"]
@@ -27,7 +31,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetDoubleClickTime, GetKeyState, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_ESCAPE,
     VK_LBUTTON, VK_RBUTTON, VK_SHIFT,
@@ -543,23 +547,9 @@ impl Dock {
         }
     }
 
-    /// The height to keep free at the bottom of the primary screen, in
-    /// physical pixels, while the dock stays visible.
-    pub fn reserved_height(&self) -> i32 {
-        let s = self.state.borrow();
-        if s.autohide {
-            return 0;
-        }
-        let dpi = unsafe {
-            let primary = MonitorFromPoint(POINT::default(), MONITOR_DEFAULTTOPRIMARY);
-            let (mut x, mut y) = (0, 0);
-            if GetDpiForMonitor(primary, MDT_EFFECTIVE_DPI, &mut x, &mut y).is_ok() {
-                y
-            } else {
-                96
-            }
-        };
-        ((logic::HEIGHT + 2.0 * logic::MARGIN) * dpi.max(96) as f32 / 96.0).round() as i32
+    /// Whether the dock stays on screen instead of auto-hiding.
+    pub fn stays_visible(&self) -> bool {
+        !self.state.borrow().autohide
     }
 
     /// Hides the dock until `show`, such as while the launcher is open.
