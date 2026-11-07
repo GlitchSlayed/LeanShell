@@ -471,7 +471,7 @@ pub struct TaskbarHider {
     /// Pixels kept free at the bottom of the primary screen for a dock that
     /// stays visible, and the amount last applied.
     reserve: i32,
-    applied_reserve: i32,
+    reservation: Option<state::Reservation>,
     _thread: PhantomData<Rc<()>>,
 }
 
@@ -523,7 +523,7 @@ impl TaskbarHider {
             taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
             peek: None,
             reserve: 0,
-            applied_reserve: 0,
+            reservation: None,
             _thread: PhantomData,
         };
         if hook.is_invalid() {
@@ -686,9 +686,9 @@ impl TaskbarHider {
             for bar in current.iter().filter(|bar| bar.monitor == monitor.bounds) {
                 target = state::reclaimed_work(monitor.bounds, target, bar.rect);
             }
+            let mut reservation = None;
             if monitor.bounds == primary_bounds {
-                target = state::reserved_work(monitor.bounds, target, self.applied_reserve, self.reserve);
-                self.applied_reserve = self.reserve;
+                (target, reservation) = state::reserved_work(monitor.bounds, target, self.reservation, self.reserve);
             }
             if target != monitor.work {
                 println!("reclaim work area {:?} -> {:?}", monitor.work, target);
@@ -699,6 +699,10 @@ impl TaskbarHider {
                 {
                     return Err(failure("SPI_SETWORKAREA did not take effect"));
                 }
+            }
+            // Remembered only once it holds, so a failed change can be undone later.
+            if monitor.bounds == primary_bounds {
+                self.reservation = reservation;
             }
         }
         let primary = monitor_info(unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) })?;

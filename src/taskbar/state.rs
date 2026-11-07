@@ -33,18 +33,37 @@ pub fn reclaimed_work(monitor: Rect, work: Rect, bar: Rect) -> Rect {
     target
 }
 
+/// Space Wisp keeps at the bottom of the primary screen for the dock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reservation {
+    /// The screen it is on.
+    pub monitor: Rect,
+    /// The work area's bottom that Wisp set.
+    pub bottom: i32,
+    /// The bottom before Wisp changed it, which may leave room for another
+    /// appbar.
+    pub base: i32,
+}
+
 /// The primary screen's work area with `reserve` pixels kept free at the
-/// bottom for the dock. `applied` is the reserve set last time, which comes
-/// off first so a smaller reserve, or none, gives the space back.
-pub fn reserved_work(monitor: Rect, work: Rect, applied: i32, reserve: i32) -> Rect {
-    let mut target = work;
-    if applied > 0 && target.bottom == monitor.bottom - applied {
-        target.bottom = monitor.bottom;
+/// bottom for the dock, and the reservation to remember once it is applied.
+/// `previous` comes off first, back to the bottom it replaced, so a smaller
+/// reserve, or none, gives the space back without taking another appbar's.
+pub fn reserved_work(
+    monitor: Rect,
+    work: Rect,
+    previous: Option<Reservation>,
+    reserve: i32,
+) -> (Rect, Option<Reservation>) {
+    let base = match previous {
+        Some(previous) if previous.monitor == monitor && previous.bottom == work.bottom => previous.base,
+        _ => work.bottom,
+    };
+    if reserve <= 0 {
+        return (Rect { bottom: base, ..work }, None);
     }
-    if reserve > 0 {
-        target.bottom = target.bottom.min(monitor.bottom - reserve);
-    }
-    target
+    let bottom = base.min(monitor.bottom - reserve);
+    (Rect { bottom, ..work }, Some(Reservation { monitor, bottom, base }))
 }
 
 pub fn visibility_diff(previous: bool, current: bool) -> Option<bool> {
@@ -63,24 +82,21 @@ mod tests {
             right: 1920,
             bottom: 1080,
         };
-        let full = monitor;
-        let reserved = Rect {
-            bottom: 1006,
-            ..monitor
-        };
-        assert_eq!(reserved_work(monitor, full, 0, 74), reserved);
+        let at = |bottom| Rect { bottom, ..monitor };
+        let (work, kept) = reserved_work(monitor, monitor, None, 74);
+        assert_eq!(work, at(1006));
         // Applying the same reserve again changes nothing.
-        assert_eq!(reserved_work(monitor, reserved, 74, 74), reserved);
+        assert_eq!(reserved_work(monitor, work, kept, 74), (work, kept));
         // A new size replaces the old one, and none gives the space back.
-        assert_eq!(
-            reserved_work(monitor, reserved, 74, 92),
-            Rect { bottom: 988, ..monitor }
-        );
-        assert_eq!(reserved_work(monitor, reserved, 74, 0), full);
-        // A work area someone else made smaller is left alone.
-        let other = Rect { bottom: 900, ..monitor };
-        assert_eq!(reserved_work(monitor, other, 74, 0), other);
-        assert_eq!(reserved_work(monitor, other, 0, 74), other);
+        assert_eq!(reserved_work(monitor, work, kept, 92).0, at(988));
+        assert_eq!(reserved_work(monitor, work, kept, 0), (monitor, None));
+        // Another appbar's 60 px stays when Wisp gives its space back.
+        let (work, kept) = reserved_work(monitor, at(1020), None, 74);
+        assert_eq!(work, at(1006));
+        assert_eq!(reserved_work(monitor, work, kept, 0).0, at(1020));
+        // A work area someone else changed since is left alone.
+        assert_eq!(reserved_work(monitor, at(900), kept, 0).0, at(900));
+        assert_eq!(reserved_work(monitor, at(900), None, 74).0, at(900));
     }
 
     #[test]
