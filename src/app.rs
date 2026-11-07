@@ -624,6 +624,11 @@ impl Launcher {
     fn sync_reserve(&mut self) {
         let hidden = self.taskbar.as_ref().is_some_and(TaskbarHider::is_active);
         let wanted = hidden && self.dock.as_ref().is_some_and(Dock::stays_visible);
+        // Before the space exists, so a re-hide while Windows places it
+        // cannot take the bottom back.
+        if wanted && let Some(hider) = &mut self.taskbar {
+            hider.keep_bottom(true);
+        }
         if !wanted {
             self.dock_space = None;
         } else if let Some(space) = &self.dock_space {
@@ -2129,8 +2134,11 @@ impl Launcher {
             eprintln!("could not restore the taskbar: {e}");
         }
         // Removed last, so Windows works the work area out again from the
-        // restored taskbar and the remaining app bars.
-        self.dock_space = None;
+        // restored taskbar and the remaining app bars. Waits, so the space
+        // is back before Wisp exits.
+        if let Some(space) = self.dock_space.take() {
+            space.close();
+        }
         unsafe {
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_ID);
         }
@@ -2474,12 +2482,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         },
         WM_ERASEBKGND => return LRESULT(1),
         WM_SETTINGCHANGE => {
+            // Explorer waits for every window while it broadcasts this, and
+            // the taskbar hider asks Explorer for its state: let it go first.
+            unsafe {
+                let _ = ReplyMessage(LRESULT(0));
+            }
             with_launcher(|l| {
                 l.on_taskbar_message(msg);
                 l.apply_theme();
             });
         }
         WM_DISPLAYCHANGE | taskbar::WM_TASKBAR_SHOW | taskbar::WM_RECOVERY_DONE => {
+            unsafe {
+                let _ = ReplyMessage(LRESULT(0));
+            }
             with_launcher(|l| {
                 l.on_taskbar_message(msg);
                 if msg == WM_DISPLAYCHANGE
