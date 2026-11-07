@@ -685,9 +685,10 @@ impl Launcher {
     fn on_taskbar_message(&mut self, msg: u32) {
         let Some(hider) = &mut self.taskbar else { return };
         match hider.on_message(msg) {
-            // A later failure gets its retries again.
-            Ok(true) => self.taskbar_failures = 0,
-            Ok(false) => {}
+            // A later failure gets its retries again, but only once the
+            // taskbar is really hidden: a failed restore also lands here.
+            Ok(true) if self.config.hide_taskbar && hider.is_active() => self.taskbar_failures = 0,
+            Ok(_) => {}
             Err(e) => self.taskbar_failed(&e),
         }
     }
