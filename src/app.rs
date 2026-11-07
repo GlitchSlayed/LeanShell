@@ -711,13 +711,14 @@ impl Launcher {
 
     /// Hides the taskbar again after Explorer or Windows shows it.
     fn on_taskbar_message(&mut self, msg: u32) {
-        let Some(hider) = &mut self.taskbar else { return };
-        match hider.on_message(msg) {
-            // A later failure gets its retries again, but only once the
-            // taskbar is really hidden: a failed restore also lands here.
-            Ok(true) if self.config.hide_taskbar && hider.is_active() => self.taskbar_failures = 0,
-            Ok(_) => {}
-            Err(e) => self.taskbar_failed(&e),
+        if let Some(hider) = &mut self.taskbar {
+            match hider.on_message(msg) {
+                // A later failure gets its retries again, but only once the
+                // taskbar is really hidden: a failed restore also lands here.
+                Ok(true) if self.config.hide_taskbar && hider.is_active() => self.taskbar_failures = 0,
+                Ok(_) => {}
+                Err(e) => self.taskbar_failed(&e),
+            }
         }
         // Explorer restarting or the hider reclaiming space can take the
         // dock's space away.
