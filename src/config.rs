@@ -9,6 +9,8 @@ use crate::util;
 
 /// wisp-settings includes the same file, so both apps create the same config.
 const DEFAULT_CONFIG: &str = include_str!("default-config.toml");
+/// Values for missing keys that differ from the default config, shared with wisp-settings.
+const MISSING_KEYS: &str = include_str!("config-0.3.toml");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -35,8 +37,9 @@ pub enum Position {
     Bottom,
 }
 
-/// Keys missing from the user's file take their value from the default config,
-/// as in wisp-settings, so both apps agree on what an old config means.
+/// Keys missing from the user's file take their value from `config-0.3.toml`,
+/// then from the default config, as in wisp-settings, so both apps agree on
+/// what an old config means.
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub hide_taskbar: bool,
@@ -54,7 +57,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self::parse("").expect("valid default config")
+        Self::parse(DEFAULT_CONFIG).expect("valid default config")
     }
 }
 
@@ -89,9 +92,11 @@ impl Config {
         }
     }
 
-    /// Reads a config, taking each missing key from the default config.
+    /// Reads a config, taking each missing key from `config-0.3.toml` or the
+    /// default config.
     fn parse(text: &str) -> Result<Config, toml::de::Error> {
         let mut table: toml::Table = toml::from_str(DEFAULT_CONFIG)?;
+        table.extend(toml::from_str::<toml::Table>(MISSING_KEYS)?);
         table.extend(toml::from_str::<toml::Table>(text)?);
         table.try_into()
     }
@@ -108,14 +113,16 @@ mod tests {
     }
 
     #[test]
-    fn missing_keys_take_the_default_config() {
-        // A config from before the dock has none of its keys.
+    fn missing_keys_keep_a_config_from_before_the_dock() {
+        // A Wisp 0.3 config has none of the dock's keys and keeps the taskbar.
         let config = Config::parse("hotkey = \"Ctrl+Space\"").unwrap();
-        assert_eq!(config.hotkey, "Ctrl+Space");
-        assert!(config.dock && config.hide_taskbar);
-        assert_eq!(config.position, Position::Bottom);
+        assert_eq!((config.hotkey.as_str(), config.max_results), ("Ctrl+Space", 8));
+        assert!(!config.dock && !config.hide_taskbar);
+        assert_eq!(config.position, Position::Center);
+        // A new config has them all.
         let default = Config::default();
-        assert_eq!((default.hotkey.as_str(), default.max_results), ("Alt+Space", 8));
+        assert!(default.dock && default.hide_taskbar);
+        assert_eq!(default.position, Position::Bottom);
         assert!(Config::parse("dock = \"yes\"").is_err());
     }
 }
