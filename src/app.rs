@@ -588,6 +588,7 @@ impl Launcher {
         }
         if !self.config.dock {
             self.dock = None;
+            self.sync_reserve();
             return;
         }
         if self.dock.is_none() {
@@ -608,7 +609,19 @@ impl Launcher {
             dock.set_apps(&self.apps, &self.icons);
             // Notification icons need a home while the taskbar is hidden.
             dock.set_tray(self.taskbar.as_ref().is_some_and(TaskbarHider::is_active));
+            dock.set_autohide(self.config.dock_autohide);
             if self.visible { dock.hide() } else { dock.show() }
+        }
+        self.sync_reserve();
+    }
+
+    /// Keeps maximized windows above a dock that stays visible.
+    fn sync_reserve(&mut self) {
+        let pixels = self.dock.as_ref().map_or(0, Dock::reserved_height);
+        if let Some(hider) = &mut self.taskbar
+            && let Err(e) = hider.set_reserve(pixels)
+        {
+            eprintln!("could not keep space for the dock: {e}");
         }
     }
 
@@ -683,6 +696,10 @@ impl Launcher {
 
     /// Hides the taskbar again after Explorer or Windows shows it.
     fn on_taskbar_message(&mut self, msg: u32) {
+        // The primary screen's scale may have changed the dock's height.
+        if msg == WM_DISPLAYCHANGE || msg == WM_SETTINGCHANGE {
+            self.sync_reserve();
+        }
         let Some(hider) = &mut self.taskbar else { return };
         match hider.on_message(msg) {
             // A later failure gets its retries again, but only once the

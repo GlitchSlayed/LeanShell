@@ -25,7 +25,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetDoubleClickTime, GetKeyState, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_ESCAPE,
     VK_LBUTTON, VK_RBUTTON, VK_SHIFT,
@@ -101,6 +101,9 @@ struct State {
     /// Stays revealed regardless of the pointer, for the demo's screenshots,
     /// optionally at another DPI than the monitor's.
     held: bool,
+    /// Whether the dock hides until the pointer touches a bottom edge. When
+    /// false it stays on the primary screen.
+    autohide: bool,
     suspended: bool,
     frame_paced: bool,
     held_dpi: Option<u32>,
@@ -185,6 +188,7 @@ impl Dock {
             revealed: false,
             away: 0,
             held: false,
+            autohide: true,
             suspended: false,
             frame_paced: false,
             held_dpi: None,
@@ -480,7 +484,8 @@ impl Dock {
         self.state.borrow_mut().suspended = false;
         let mut s = self.state.borrow_mut();
         s.visible = true;
-        s.revealed = false;
+        // A dock that stays visible comes back in place, without sliding.
+        s.revealed = !s.autohide;
         s.surface_rect = None;
         s.stop_slide();
         unsafe {
@@ -520,6 +525,41 @@ impl Dock {
         }
         s.sync_tray();
     }
+    /// Keeps the dock visible on the primary screen, or lets it auto-hide.
+    pub fn set_autohide(&mut self, autohide: bool) {
+        let mut s = self.state.borrow_mut();
+        if s.autohide == autohide {
+            return;
+        }
+        s.autohide = autohide;
+        if !autohide && s.visible && !s.suspended && !s.revealed {
+            s.reveal();
+        } else {
+            // Move to the primary screen, or start the hide countdown.
+            s.away = 0;
+            s.place();
+        }
+    }
+
+    /// The height to keep free at the bottom of the primary screen, in
+    /// physical pixels, while the dock stays visible.
+    pub fn reserved_height(&self) -> i32 {
+        let s = self.state.borrow();
+        if s.autohide {
+            return 0;
+        }
+        let dpi = unsafe {
+            let primary = MonitorFromPoint(POINT::default(), MONITOR_DEFAULTTOPRIMARY);
+            let (mut x, mut y) = (0, 0);
+            if GetDpiForMonitor(primary, MDT_EFFECTIVE_DPI, &mut x, &mut y).is_ok() {
+                y
+            } else {
+                96
+            }
+        };
+        ((logic::HEIGHT + 2.0 * logic::MARGIN) * dpi.max(96) as f32 / 96.0).round() as i32
+    }
+
     /// Hides the dock until `show`, such as while the launcher is open.
     pub fn hide(&mut self) {
         let mut s = self.state.borrow_mut();
@@ -709,6 +749,13 @@ impl State {
             return;
         }
         if !self.revealed {
+            if !self.autohide {
+                // Back after a fullscreen app, or after the launcher closed.
+                if !fullscreen_foreground(self.hwnd) {
+                    self.reveal();
+                }
+                return;
+            }
             // Dragging along the bottom edge, such as a scroll bar, is not a request for the dock.
             let dragging =
                 unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 || GetAsyncKeyState(VK_RBUTTON.0 as i32) < 0 };
@@ -735,7 +782,8 @@ impl State {
         let slack = (12 * self.dpi / 96) as i32;
         // The gap below the dock counts as on it, so the pointer can rest on the edge.
         // The dock stays while its flyout is open.
-        let near = self.held
+        let near = !self.autohide
+            || self.held
             || self.flyout_open
             || cursor.x >= rect.left - slack && cursor.x < rect.right + slack && cursor.y >= rect.top - slack;
         if near {
@@ -872,9 +920,12 @@ impl State {
             return;
         }
         unsafe {
-            // The dock appears on the screen whose bottom edge the pointer touched.
+            // The dock appears on the screen whose bottom edge the pointer
+            // touched, or stays on the primary screen.
             let mut cursor = POINT::default();
-            let _ = GetCursorPos(&mut cursor);
+            if self.autohide {
+                let _ = GetCursorPos(&mut cursor);
+            }
             let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY);
             let mut info = MONITORINFO {
                 cbSize: size_of::<MONITORINFO>() as u32,

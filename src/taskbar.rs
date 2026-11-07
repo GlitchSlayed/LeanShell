@@ -468,6 +468,10 @@ pub struct TaskbarHider {
     taskbar_created: u32,
     /// When the user asked to see the taskbar; hiding waits until they are done.
     peek: Option<Instant>,
+    /// Pixels kept free at the bottom of the primary screen for a dock that
+    /// stays visible, and the amount last applied.
+    reserve: i32,
+    applied_reserve: i32,
     _thread: PhantomData<Rc<()>>,
 }
 
@@ -518,6 +522,8 @@ impl TaskbarHider {
             restored: false,
             taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
             peek: None,
+            reserve: 0,
+            applied_reserve: 0,
             _thread: PhantomData,
         };
         if hook.is_invalid() {
@@ -553,6 +559,16 @@ impl TaskbarHider {
             *slot = None;
         }
         Ok(())
+    }
+
+    /// Keeps `pixels` free at the bottom of the primary screen, so maximized
+    /// windows stop above a dock that stays visible. 0 gives the space back.
+    pub fn set_reserve(&mut self, pixels: i32) -> Result<()> {
+        if self.reserve == pixels {
+            return Ok(());
+        }
+        self.reserve = pixels.max(0);
+        self.reapply()
     }
 
     pub fn is_active(&self) -> bool {
@@ -662,10 +678,17 @@ impl TaskbarHider {
         if bars()?.iter().any(|bar| bar.visible) {
             return Err(failure("A taskbar remained visible after SW_HIDE"));
         }
+        let primary_bounds = Rect::from(
+            monitor_info(unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) })?.rcMonitor,
+        );
         for monitor in monitors()? {
             let mut target = monitor.work;
             for bar in current.iter().filter(|bar| bar.monitor == monitor.bounds) {
                 target = state::reclaimed_work(monitor.bounds, target, bar.rect);
+            }
+            if monitor.bounds == primary_bounds {
+                target = state::reserved_work(monitor.bounds, target, self.applied_reserve, self.reserve);
+                self.applied_reserve = self.reserve;
             }
             if target != monitor.work {
                 println!("reclaim work area {:?} -> {:?}", monitor.work, target);

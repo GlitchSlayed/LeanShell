@@ -33,6 +33,20 @@ pub fn reclaimed_work(monitor: Rect, work: Rect, bar: Rect) -> Rect {
     target
 }
 
+/// The primary screen's work area with `reserve` pixels kept free at the
+/// bottom for the dock. `applied` is the reserve set last time, which comes
+/// off first so a smaller reserve, or none, gives the space back.
+pub fn reserved_work(monitor: Rect, work: Rect, applied: i32, reserve: i32) -> Rect {
+    let mut target = work;
+    if applied > 0 && target.bottom == monitor.bottom - applied {
+        target.bottom = monitor.bottom;
+    }
+    if reserve > 0 {
+        target.bottom = target.bottom.min(monitor.bottom - reserve);
+    }
+    target
+}
+
 pub fn visibility_diff(previous: bool, current: bool) -> Option<bool> {
     (previous != current).then_some(previous)
 }
@@ -40,6 +54,34 @@ pub fn visibility_diff(previous: bool, current: bool) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reserves_and_returns_space_for_the_dock() {
+        let monitor = Rect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let full = monitor;
+        let reserved = Rect {
+            bottom: 1006,
+            ..monitor
+        };
+        assert_eq!(reserved_work(monitor, full, 0, 74), reserved);
+        // Applying the same reserve again changes nothing.
+        assert_eq!(reserved_work(monitor, reserved, 74, 74), reserved);
+        // A new size replaces the old one, and none gives the space back.
+        assert_eq!(
+            reserved_work(monitor, reserved, 74, 92),
+            Rect { bottom: 988, ..monitor }
+        );
+        assert_eq!(reserved_work(monitor, reserved, 74, 0), full);
+        // A work area someone else made smaller is left alone.
+        let other = Rect { bottom: 900, ..monitor };
+        assert_eq!(reserved_work(monitor, other, 74, 0), other);
+        assert_eq!(reserved_work(monitor, other, 0, 74), other);
+    }
 
     #[test]
     fn preserves_other_state_bits() {
