@@ -1223,6 +1223,8 @@ impl State {
 
     /// The pointer rests on `target`; its tooltip follows after a moment.
     fn hover_tip(&mut self, target: Option<tray::Tip>) {
+        // The open flyout already shows what the chevron's tooltip offers.
+        let target = target.filter(|&t| !(t == tray::Tip::Chevron && self.flyout_open));
         if self.tip_target == target || self.held {
             return;
         }
@@ -1241,7 +1243,6 @@ impl State {
         unsafe {
             let _ = KillTimer(Some(self.hwnd), DESKTOP_TIMER);
             let _ = KillTimer(Some(self.hwnd), TIP_TIMER);
-            let _ = KillTimer(Some(self.hwnd), HOVER_TIMER);
             let _ = ShowWindow(self.tip, SW_HIDE);
         }
     }
@@ -1250,7 +1251,6 @@ impl State {
     fn show_tip(&mut self) {
         unsafe {
             let _ = KillTimer(Some(self.hwnd), TIP_TIMER);
-            let _ = KillTimer(Some(self.hwnd), HOVER_TIMER);
         }
         let (text, anchor) = match self.tip_target {
             Some(tray::Tip::Chevron) => ("Show hidden icons".to_string(), self.part_rect(logic::Part::Chevron)),
