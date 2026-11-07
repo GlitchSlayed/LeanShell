@@ -35,8 +35,9 @@ pub enum Position {
     Bottom,
 }
 
+/// Keys missing from the user's file take their value from the default config,
+/// as in wisp-settings, so both apps agree on what an old config means.
 #[derive(Debug, Deserialize)]
-#[serde(default)]
 pub struct Config {
     pub hide_taskbar: bool,
     pub dock: bool,
@@ -53,36 +54,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            hide_taskbar: false,
-            dock: false,
-            hotkey: "Alt+Space".into(),
-            max_results: 8,
-            theme: Theme::System,
-            backdrop: Backdrop::Acrylic,
-            position: Position::Center,
-            show_recent: true,
-            search_url: "https://www.google.com/search?q={query}".into(),
-            file_search: true,
-            file_search_exclude: [
-                "node_modules",
-                "AppData",
-                "site-packages",
-                "__pycache__",
-                "venv",
-                "target",
-                "dist",
-                "build",
-                "Cache",
-                "Code Cache",
-                "GPUCache",
-                "Service Worker",
-                "IndexedDB",
-                "Extensions",
-            ]
-            .map(String::from)
-            .to_vec(),
-        }
+        Self::parse("").expect("valid default config")
     }
 }
 
@@ -108,7 +80,7 @@ impl Config {
             // Preserve unreadable files, including locked files and invalid UTF-8.
             Err(e) => return (Config::default(), Some(format!("config.toml: {e}"))),
         };
-        match toml::from_str::<Config>(&text) {
+        match Self::parse(&text) {
             Ok(mut config) => {
                 config.max_results = config.max_results.clamp(1, 20);
                 (config, None)
@@ -116,13 +88,34 @@ impl Config {
             Err(e) => (Config::default(), Some(format!("config.toml: {}", e.message()))),
         }
     }
+
+    /// Reads a config, taking each missing key from the default config.
+    fn parse(text: &str) -> Result<Config, toml::de::Error> {
+        let mut table: toml::Table = toml::from_str(DEFAULT_CONFIG)?;
+        table.extend(toml::from_str::<toml::Table>(text)?);
+        table.try_into()
+    }
 }
 
 #[cfg(test)]
-mod dock_compat_tests {
+mod tests {
+    use super::*;
+
     #[test]
     fn legacy_pins_are_ignored() {
-        let config: super::Config = toml::from_str("dock = true\ndock_apps = ['old.app']").unwrap();
+        let config = Config::parse("dock = true\ndock_apps = ['old.app']").unwrap();
         assert!(config.dock);
+    }
+
+    #[test]
+    fn missing_keys_take_the_default_config() {
+        // A config from before the dock has none of its keys.
+        let config = Config::parse("hotkey = \"Ctrl+Space\"").unwrap();
+        assert_eq!(config.hotkey, "Ctrl+Space");
+        assert!(config.dock && config.hide_taskbar);
+        assert_eq!(config.position, Position::Bottom);
+        let default = Config::default();
+        assert_eq!((default.hotkey.as_str(), default.max_results), ("Alt+Space", 8));
+        assert!(Config::parse("dock = \"yes\"").is_err());
     }
 }
