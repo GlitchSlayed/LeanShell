@@ -6,6 +6,8 @@ mod desktops;
 mod logic;
 #[path = "dock/render.rs"]
 mod render;
+#[path = "dock/space.rs"]
+pub mod space;
 #[path = "dock/status.rs"]
 mod status;
 #[path = "dock/tray.rs"]
