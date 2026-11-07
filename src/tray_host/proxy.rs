@@ -12,7 +12,7 @@ use windows::Win32::System::Registry::*;
 use windows::Win32::System::Threading::*;
 use windows::Win32::UI::Shell::{KNOWN_FOLDER_FLAG, SHGetKnownFolderPath};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{BOOL, GUID, HSTRING, PCWSTR, PWSTR, w};
+use windows::core::{GUID, HSTRING, PCWSTR, PWSTR, w};
 
 use super::model::{self, Owner, Promotion};
 use super::wire::{self, Notify};
@@ -240,17 +240,16 @@ impl Host {
             let _ = SetPropW(proxy, PROXY_PROP, Some(HANDLE(1 as _)));
             // Explorer's tray accepts these from lower integrity apps, so ours must too.
             let _ = ChangeWindowMessageFilterEx(proxy, WM_COPYDATA, MSGFLT_ALLOW, None);
+            // Start and taskbar flyouts lift Explorer's tray into a higher
+            // z-order band for a while; `check` keeps trying to outrank it.
+            self.outranked = 0;
             if !self.outrank() {
                 let found = FindWindowW(TRAY_CLASS, None).unwrap_or_default();
-                self.detach();
-                return Err(format!(
-                    "FindWindow still returns {:?}, not the tray proxy; leaving the tray to Explorer",
-                    found.0
-                ));
+                eprintln!("Tray host: {:?} outranks the proxy in FindWindow for now", found.0);
+                self.outranked = 1;
             }
         }
         self.waiting = 0;
-        self.outranked = 0;
         Ok(())
     }
 
@@ -452,28 +451,17 @@ fn owner_alive(hwnd: u32, pid: u32) -> bool {
 
 /// Explorer's own primary taskbar: the class, minus our proxy, in an explorer.exe.
 fn explorer_tray() -> Option<(HWND, u32)> {
-    unsafe extern "system" fn callback(hwnd: HWND, data: LPARAM) -> BOOL {
-        let found = unsafe { &mut *(data.0 as *mut Option<(HWND, u32)>) };
+    crate::taskbar::taskbar_windows().into_iter().find_map(|hwnd| {
         let mut class = [0u16; 32];
         let len = unsafe { GetClassNameW(hwnd, &mut class) } as usize;
-        if class[..len] == *"Shell_TrayWnd".encode_utf16().collect::<Vec<_>>() {
-            let mut pid = 0;
-            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-            if pid != std::process::id()
-                && unsafe { GetPropW(hwnd, PROXY_PROP) }.is_invalid()
-                && process_path(pid).is_some_and(|path| path.to_lowercase().ends_with(r"\explorer.exe"))
-            {
-                *found = Some((hwnd, pid));
-                return BOOL(0);
-            }
-        }
-        BOOL(1)
-    }
-    let mut found = None;
-    unsafe {
-        let _ = EnumWindows(Some(callback), LPARAM(&mut found as *mut _ as isize));
-    }
-    found
+        let mut pid = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        (class[..len] == *"Shell_TrayWnd".encode_utf16().collect::<Vec<_>>()
+            && pid != std::process::id()
+            && unsafe { GetPropW(hwnd, PROXY_PROP) }.is_invalid()
+            && process_path(pid).is_some_and(|path| path.to_lowercase().ends_with(r"\explorer.exe")))
+        .then_some((hwnd, pid))
+    })
 }
 
 pub fn process_path(pid: u32) -> Option<String> {
