@@ -29,6 +29,22 @@ jobs:
           Copy-Item target/release/wisp-settings.exe "wisp-settings-${{ github.ref_name }}-x86_64.exe"
           $files = "$name.zip", "wisp-${{ github.ref_name }}-x86_64.exe", "wisp-settings-${{ github.ref_name }}-x86_64.exe"
           $files | ForEach-Object { (Get-FileHash $_ -Algorithm SHA256).Hash + "  $_" } | Out-File -Encoding ascii SHA256SUMS.txt
+      # The notes are the version's section of CHANGELOG.md, followed by the
+      # pull requests GitHub lists for the release (.github/release.yml).
+      - name: Notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $section = [regex]::Match((Get-Content CHANGELOG.md -Raw),
+            "(?ms)^## $([regex]::Escape($version))\b[^\n]*\n(.*?)(?=^## |\z)").Groups[1].Value.Trim()
+          if (-not $section) { throw "CHANGELOG.md has no section for $version" }
+          $pulls = gh api "repos/${{ github.repository }}/releases/generate-notes" `
+            -f tag_name="${{ github.ref_name }}" --jq .body
+          $pulls = $pulls -join "`n"
+          "$section`n`n<details>`n<summary>Pull requests</summary>`n`n$pulls`n`n</details>`n" |
+            Out-File -Encoding utf8 notes.md
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,4 +55,4 @@ jobs:
             "wisp-${{ github.ref_name }}-x86_64.exe" `
             "wisp-settings-${{ github.ref_name }}-x86_64.exe" `
             SHA256SUMS.txt `
-            --title "Wisp ${{ github.ref_name }}" --generate-notes
+            --title "Wisp ${{ github.ref_name }}" --notes-file notes.md
