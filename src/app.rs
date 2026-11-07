@@ -21,6 +21,7 @@ use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use crate::commands::{self, Command, Commands};
 use crate::config::{Config, Position, Theme};
+use crate::dock::space::DockSpace;
 use crate::dock::{self, Dock};
 use crate::drag::{self, Payload};
 use crate::files::{FileResults, FileSearch};
@@ -277,6 +278,7 @@ pub fn run() -> Result<()> {
             commands_sent: 0,
             taskbar: None,
             taskbar_failures: 0,
+            dock_space: None,
             dock: None,
             morph: None,
             morphed: false,
@@ -450,6 +452,8 @@ struct Launcher {
     taskbar: Option<TaskbarHider>,
     /// Failed attempts to hide or restore the taskbar since the config changed.
     taskbar_failures: u32,
+    /// Room kept for a dock that stays visible.
+    dock_space: Option<DockSpace>,
     dock: Option<Dock>,
     morph: Option<Morph>,
     morphed: bool,
@@ -615,13 +619,20 @@ impl Launcher {
         self.sync_reserve();
     }
 
-    /// Keeps maximized windows above a dock that stays visible.
+    /// Keeps maximized windows above a dock that stays visible while the
+    /// taskbar is hidden. A shown taskbar keeps its own space.
     fn sync_reserve(&mut self) {
-        let pixels = self.dock.as_ref().map_or(0, Dock::reserved_height);
-        if let Some(hider) = &mut self.taskbar
-            && let Err(e) = hider.set_reserve(pixels)
-        {
-            eprintln!("could not keep space for the dock: {e}");
+        let hidden = self.taskbar.as_ref().is_some_and(TaskbarHider::is_active);
+        let height = self.dock.as_ref().filter(|_| hidden).map_or(0, Dock::reserved_height);
+        if height == 0 {
+            self.dock_space = None;
+        } else if let Some(space) = &mut self.dock_space {
+            space.set_height(height);
+        } else {
+            match DockSpace::new(height) {
+                Ok(space) => self.dock_space = Some(space),
+                Err(e) => eprintln!("could not keep space for the dock: {e}"),
+            }
         }
     }
 
@@ -697,7 +708,7 @@ impl Launcher {
     /// Hides the taskbar again after Explorer or Windows shows it.
     fn on_taskbar_message(&mut self, msg: u32) {
         // The primary screen's scale may have changed the dock's height.
-        if msg == WM_DISPLAYCHANGE || msg == WM_SETTINGCHANGE {
+        if msg == WM_DISPLAYCHANGE {
             self.sync_reserve();
         }
         let Some(hider) = &mut self.taskbar else { return };
@@ -2110,6 +2121,8 @@ impl Launcher {
 
     fn shutdown(&mut self) {
         self.dock = None;
+        // Give the space back before the taskbar's snapshot restores the work area.
+        self.dock_space = None;
         if let Err(e) = TaskbarHider::configure(&mut self.taskbar, self.hwnd, false) {
             eprintln!("could not restore the taskbar: {e}");
         }
