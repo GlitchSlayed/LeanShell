@@ -1,0 +1,12 @@
+# Groups the pull request list that the release workflow adds under the
+# notes from CHANGELOG.md.
+changelog:
+  exclude:
+    labels: [release, skip-changelog]
+  categories:
+    - title: New
+      labels: [enhancement]
+    - title: Fixes
+      labels: [bug]
+    - title: Under the hood
+      labels: ["*"]

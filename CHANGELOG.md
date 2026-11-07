@@ -1,0 +1,34 @@
+# Changelog
+
+User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
+
+## Unreleased
+
+## 0.5.0 - 2026-11-07
+
+### New
+
+- **Keep the dock visible.** A new option in Settings keeps the dock on screen and reserves its space, so maximized windows stop above it instead of going behind it. Full-screen apps still hide it, including apps that go full screen from a maximized window. (#9)
+- **Click the app in front to minimize it**, like a taskbar button. Click it again to bring it back. (#14, by @JulienMaille)
+
+### Fixes
+
+- Wisp now hides the taskbar when you start it from the Start menu. Before, it could fail with "Could not find primary taskbar". (#8)
+- Clicking an app in the dock now switches to it while Action Center, Start or search is open. (#13, by @JulienMaille, fixes #11)
+- Dock icons keep their place when clicked instead of moving to the front. (#5, by @JulienMaille)
+- Tray icons are sharp instead of pixelated. (#3, by @JulienMaille, fixes #2)
+- Windows 10: icons and text use the Windows 10 fonts instead of drawing as boxes. (#10, for #1)
+- The tray no longer comes up empty after starting Wisp from the Start menu. (#9)
+- Turning "Keep the dock visible" on or off no longer freezes the dock and launcher for up to two seconds. (#9)
+- Taskbar hiding retries reliably after Explorer restarts and display changes. (#8)
+- An icon no longer stays raised after hovering the hidden-icons arrow. (#16)
+- The "Show hidden icons" tooltip no longer covers its own flyout. (#17)
+- Configs from older versions pick up new settings from the defaults. Configs from Wisp 0.3 keep the taskbar as before. (#8)
+
+### Thanks
+
+@JulienMaille contributed their first pull requests to Wisp in this release: #3, #5, #13 and #14.
+
+## Earlier releases
+
+See the [releases page](https://github.com/SumirSeth/wisp/releases) for 0.4.2 and earlier.
