@@ -53,6 +53,11 @@ const SURFACE_TIMER: usize = 2;
 const SURFACE_REFRESH_MS: u32 = 1000;
 /// Checks whether the user is done with a taskbar shown from the dock.
 const PEEK_TIMER: usize = 3;
+/// Tries again to hide the taskbar after a failure. At sign-in Explorer may
+/// not have finished creating it.
+const TASKBAR_TIMER: usize = 4;
+const TASKBAR_RETRY_MS: u32 = 2000;
+const TASKBAR_ATTEMPTS: u32 = 5;
 /// File results shown after apps, and for a query that starts with `?`.
 const MIXED_FILE_RESULTS: usize = 5;
 const ONLY_FILE_RESULTS: usize = 30;
@@ -271,6 +276,7 @@ pub fn run() -> Result<()> {
             surface: None,
             commands_sent: 0,
             taskbar: None,
+            taskbar_failures: 0,
             dock: None,
             morph: None,
             morphed: false,
@@ -442,6 +448,8 @@ struct Launcher {
 
     /// Hides the Windows taskbar while `hide_taskbar` is on.
     taskbar: Option<TaskbarHider>,
+    /// Failed attempts to hide or restore the taskbar since the config changed.
+    taskbar_failures: u32,
     dock: Option<Dock>,
     morph: Option<Morph>,
     morphed: bool,
@@ -565,6 +573,7 @@ impl Launcher {
             return;
         }
         self.config = config;
+        self.taskbar_failures = 0;
         self.sync_shell();
         self.apply_theme();
         self.register_hotkey(true);
@@ -573,8 +582,21 @@ impl Launcher {
     /// Hides or restores the Windows taskbar and creates or removes the dock
     /// to match the config.
     fn sync_shell(&mut self) {
-        if let Err(e) = TaskbarHider::configure(&mut self.taskbar, self.hwnd, self.config.hide_taskbar) {
-            tray::notify(self.hwnd, "Could not change the taskbar", &e.message(), true);
+        match TaskbarHider::configure(&mut self.taskbar, self.hwnd, self.config.hide_taskbar) {
+            Ok(()) => self.taskbar_failures = 0,
+            Err(e) => {
+                eprintln!("could not change the taskbar: {e}");
+                self.taskbar_failures += 1;
+                // Retry quietly first. The last failure is reported, by which
+                // time the tray icon exists to show the notification.
+                if self.taskbar_failures < TASKBAR_ATTEMPTS {
+                    unsafe {
+                        SetTimer(Some(self.hwnd), TASKBAR_TIMER, TASKBAR_RETRY_MS, None);
+                    }
+                } else {
+                    tray::notify(self.hwnd, "Could not change the taskbar", &e.message(), true);
+                }
+            }
         }
         if self.dock.as_ref().is_some_and(|d| d.shared() != self.bottom()) {
             self.dock = None;
@@ -2420,6 +2442,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_TIMER if wparam.0 == PEEK_TIMER => {
             with_launcher(Launcher::peek_tick);
+        }
+        WM_TIMER if wparam.0 == TASKBAR_TIMER => {
+            unsafe {
+                let _ = KillTimer(Some(hwnd), TASKBAR_TIMER);
+            }
+            with_launcher(Launcher::sync_shell);
         }
         WM_ENDSESSION if wparam.0 != 0 => taskbar::emergency_restore(),
         tray::WM_TRAY => match loword(lparam.0 as usize) {
