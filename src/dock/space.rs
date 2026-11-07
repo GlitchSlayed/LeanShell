@@ -25,6 +25,9 @@ thread_local! {
     static HEIGHT: Cell<f32> = const { Cell::new(0.0) };
     /// The strip last claimed, in physical pixels.
     static STRIP: Cell<RECT> = const { Cell::new(RECT { left: 0, top: 0, right: 0, bottom: 0 }) };
+    /// The primary screen's bounds and the strip's height in pixels when it
+    /// was last claimed, to tell a real display change from a broadcast.
+    static PLACED_FOR: Cell<(RECT, i32)> = const { Cell::new((RECT { left: 0, top: 0, right: 0, bottom: 0 }, 0)) };
     /// Explorer broadcasts this after it restarts, which drops every app bar.
     static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
 }
@@ -153,6 +156,7 @@ fn place(hwnd: HWND) {
         // The window itself never moves or shows, so it needs no
         // ABM_WINDOWPOSCHANGED.
         STRIP.set(data.rc);
+        PLACED_FOR.set((monitor, height));
     }
 }
 
@@ -160,8 +164,7 @@ fn place(hwnd: HWND) {
 /// broadcast caused by the strip itself does not repeat forever.
 fn place_if_changed(hwnd: HWND) {
     let Some((monitor, _, height)) = primary() else { return };
-    let strip = STRIP.get();
-    if strip.bottom - strip.top != height || strip.left != monitor.left || strip.right != monitor.right {
+    if PLACED_FOR.get() != (monitor, height) {
         place(hwnd);
     }
 }
