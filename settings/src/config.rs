@@ -6,6 +6,9 @@ use toml_edit::{DocumentMut, Item, Value};
 
 /// The launcher creates its config from the same file.
 pub const DEFAULT_CONFIG: &str = include_str!("../../src/default-config.toml");
+/// Values for missing keys that differ from the default config. The launcher
+/// reads the same file.
+const MISSING_KEYS: &str = include_str!("../../src/config-0.3.toml");
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
@@ -31,7 +34,8 @@ impl Default for Config {
 impl Config {
     fn from_document(doc: &DocumentMut) -> Result<Self, String> {
         let defaults: DocumentMut = DEFAULT_CONFIG.parse().expect("valid default config");
-        let get = |key: &str| doc.get(key).unwrap_or(&defaults[key]);
+        let missing: DocumentMut = MISSING_KEYS.parse().expect("valid missing keys");
+        let get = |key: &str| doc.get(key).or_else(|| missing.get(key)).unwrap_or(&defaults[key]);
         let string = |key: &str| {
             get(key)
                 .as_str()
@@ -218,7 +222,11 @@ mod tests {
         assert_eq!(config.file_search_exclude.len(), 14);
         assert_eq!(config.position, "bottom");
         assert!(config.dock && config.hide_taskbar);
-        assert_eq!(Config::from_document(&DocumentMut::new()).unwrap(), config);
+        // A config from Wisp 0.3 has no dock keys and keeps the taskbar, as in the launcher.
+        let old = Config::from_document(&"hotkey = 'Alt+Space'".parse().unwrap()).unwrap();
+        assert!(!old.dock && !old.hide_taskbar);
+        assert_eq!(old.position, "center");
+        assert_eq!(old.max_results, config.max_results);
     }
 
     #[test]
