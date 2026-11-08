@@ -8,6 +8,7 @@ How Wisp's pull requests, issues and releases are handled. Contributors follow [
 - **CI must pass.** Nothing merges with a failing or missing check.
 - **A build with the change must be tested** on a real desktop before merging. The author's test counts if the pull request names the build and setup. Otherwise, test it yourself, for example on Nightly.
 - **Check the template is filled in:** why, how it was verified, what wasn't tested, `Fixes #`, and a changelog entry or the `skip-changelog` label.
+- **Check the changelog entry's reference** before merging: the pull request number, `by @author` for contributors, and `fixes #` for the issue, as in `(#34, by @RayTrunk, fixes #33)`. Add or correct it yourself if it's missing.
 - **Ask for changes rather than making them.** Ask the author to rebase or fix things. For small fixes, you may push your own commit to their branch, without rewriting theirs.
 
 ## Merging

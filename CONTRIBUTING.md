@@ -85,7 +85,7 @@ Every change reaches `main` through a pull request. The template asks for the fo
 - **What changed, why, and how you verified it.** Name the build you tested and the setup: Windows version, screens, scale and dock mode. Include before and after numbers for anything that could affect speed.
 - **What you didn't test**, so the reviewer knows where to look.
 - **The issue it fixes**, as `Fixes #123`.
-- **A changelog entry** under `Unreleased` in [CHANGELOG.md](CHANGELOG.md) for anything users notice. Internal changes get the `skip-changelog` label instead.
+- **A changelog entry** under `Unreleased` in [CHANGELOG.md](CHANGELOG.md) for anything users notice, under `New` or `Fixes`. End it with the pull request, your username and the issue it fixes, such as `(#34, by @you, fixes #33)`. The pull request number exists only once it's open, so add it in a follow-up commit. Internal changes get the `skip-changelog` label instead.
 
 A pull request merges once CI passes and a build with the change has been tested. See [MAINTAINING.md](MAINTAINING.md) for how pull requests are reviewed and released.
 
