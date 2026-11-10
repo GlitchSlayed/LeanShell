@@ -50,3 +50,11 @@ window_list = "multiple"
 
 # App icons in the dock, in DIPs (24 to 40). The default is 32.
 dock_icon_size = 32
+
+# Shell mode: "companion" (runs alongside Windows while hiding taskbar)
+# or "exclusive" (primary Windows shell).
+shell_mode = "companion"
+
+# Watchdog supervisor process to automatically restore the taskbar if LeanShell exits unexpectedly.
+watchdog = true
+

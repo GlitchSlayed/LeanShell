@@ -48,6 +48,7 @@ const REEL_MS: u32 = 50;
 const WM_APP_COMMANDS: u32 = WM_APP + 7;
 const CLASS_NAME: PCWSTR = crate::channel::LAUNCHER_CLASS;
 const HOTKEY_ID: i32 = 1;
+const HOTKEY_RECOVERY: i32 = 2;
 const CARET_TIMER: usize = 1;
 /// Reads the state again while a surface is open, so it stays live.
 const SURFACE_TIMER: usize = 2;
@@ -561,6 +562,15 @@ impl Launcher {
                 tray::notify(hwnd, "Could not register shortcut", &message, true);
             }
         }
+        // Emergency recovery chord: Ctrl+Alt+Shift+Escape immediately restores taskbar and quits
+        unsafe {
+            let _ = RegisterHotKey(
+                Some(hwnd),
+                HOTKEY_RECOVERY,
+                MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+                VK_ESCAPE.0 as u32,
+            );
+        }
         tray::set_tip(hwnd, &self.tooltip());
     }
 
@@ -695,7 +705,12 @@ impl Launcher {
     fn sync_taskbar(&mut self) {
         let result = match &mut self.taskbar {
             Some(hider) if self.config.hide_taskbar => hider.reapply(),
-            _ => TaskbarHider::configure(&mut self.taskbar, self.hwnd, self.config.hide_taskbar),
+            _ => TaskbarHider::configure(
+                &mut self.taskbar,
+                self.hwnd,
+                self.config.hide_taskbar,
+                self.config.watchdog,
+            ),
         };
         match result {
             Ok(()) => self.taskbar_failures = 0,
@@ -2152,7 +2167,7 @@ impl Launcher {
 
     fn shutdown(&mut self) {
         self.dock = None;
-        if let Err(e) = TaskbarHider::configure(&mut self.taskbar, self.hwnd, false) {
+        if let Err(e) = TaskbarHider::configure(&mut self.taskbar, self.hwnd, false, false) {
             eprintln!("could not restore the taskbar: {e}");
         }
         // Removed last, so Windows works the work area out again from the
@@ -2163,6 +2178,7 @@ impl Launcher {
         }
         unsafe {
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_ID);
+            let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_RECOVERY);
         }
         tray::remove(self.hwnd);
     }
@@ -2276,8 +2292,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_NCACTIVATE => return unsafe { DefWindowProcW(hwnd, msg, wparam, LPARAM(-1)) },
         WM_NCHITTEST => return LRESULT(HTCLIENT as isize),
         WM_HOTKEY => {
-            util::perf::input("hotkey_to_content");
-            with_launcher(Launcher::toggle);
+            if wparam.0 == HOTKEY_RECOVERY as usize {
+                eprintln!("Emergency recovery chord triggered: restoring taskbar and shutting down LeanShell.");
+                unsafe {
+                    let _ = PostMessageW(Some(hwnd), WM_APP_QUIT, WPARAM(0), LPARAM(0));
+                }
+            } else {
+                util::perf::input("hotkey_to_content");
+                with_launcher(Launcher::toggle);
+            }
         }
         WM_APP_SHOW => {
             with_launcher(Launcher::show);

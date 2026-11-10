@@ -5,3 +5,5 @@
 position = "center"
 dock = false
 hide_taskbar = false
+shell_mode = "companion"
+watchdog = true

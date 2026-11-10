@@ -541,7 +541,7 @@ impl TaskbarHider {
     /// then hides the taskbars.
     /// `notification_window` must be a top-level window pumped by this thread.
     /// The current executable must dispatch the `--watchdog` mode.
-    fn start(notification_window: HWND) -> Result<Self> {
+    fn start(notification_window: HWND, enable_watchdog: bool) -> Result<Self> {
         if STOP_REQUESTED.load(Ordering::SeqCst) {
             return Err(failure("Console shutdown was requested"));
         }
@@ -558,7 +558,11 @@ impl TaskbarHider {
         if !snapshot.bars.iter().any(|b| b.class == "Shell_TrayWnd") {
             return Err(failure("Primary taskbar was not found"));
         }
-        let watchdog = Watchdog::start(&snapshot)?;
+        let watchdog = if enable_watchdog {
+            Watchdog::start(&snapshot).ok()
+        } else {
+            None
+        };
         *RECOVERY.lock().unwrap_or_else(|e| e.into_inner()) = Some(snapshot.clone());
         TARGET.store(notification_window.0 as usize, Ordering::SeqCst);
         ACTIVE.store(true, Ordering::SeqCst);
@@ -576,7 +580,7 @@ impl TaskbarHider {
         let controller = Self {
             snapshot,
             hook,
-            watchdog: Some(watchdog),
+            watchdog,
             _single_instance: mutex,
             restored: false,
             taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
@@ -606,7 +610,7 @@ impl TaskbarHider {
     }
 
     /// Reconcile the runtime config; restoration failures keep recovery armed.
-    pub fn configure(slot: &mut Option<Self>, hwnd: HWND, enabled: bool) -> Result<()> {
+    pub fn configure(slot: &mut Option<Self>, hwnd: HWND, enabled: bool, enable_watchdog: bool) -> Result<()> {
         if enabled {
             if slot.is_none() {
                 // Keep the controller when this first hide fails, as later
@@ -615,7 +619,7 @@ impl TaskbarHider {
                 // often a second screen's. The show hook and the retry hide
                 // it once Explorer is done, without restoring the taskbar and
                 // starting a new watchdog in between.
-                slot.insert(Self::start(hwnd)?).reapply()?;
+                slot.insert(Self::start(hwnd, enable_watchdog)?).reapply()?;
             }
         } else if let Some(hider) = slot {
             hider.restore()?;
@@ -823,17 +827,71 @@ impl Drop for TaskbarHider {
     }
 }
 
-/// Returns true for watchdog invocations, including malformed arguments.
-/// Call before app::run(), COM initialization and the launcher mutex.
-pub fn dispatch_watchdog() -> bool {
+/// Command-line escape hatch to immediately restore the Windows taskbar and Explorer shell.
+pub fn restore_shell_cli() -> Result<()> {
+    println!("LeanShell: Restoring Windows Taskbar and Explorer Shell...");
+
+    // 1. Reset user Winlogon Shell override in HKCU
+    unsafe {
+        use windows::Win32::System::Registry::*;
+        let mut key = HKEY::default();
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Windows NT\CurrentVersion\Winlogon"),
+            Some(0),
+            KEY_SET_VALUE | KEY_QUERY_VALUE,
+            &mut key,
+        )
+        .is_ok()
+        {
+            let _ = RegDeleteValueW(key, w!("Shell"));
+            let _ = RegCloseKey(key);
+            println!("  [OK] Reset HKCU Winlogon Shell registry value.");
+        }
+    }
+
+    // 2. Unclip and show all taskbars
+    if let Ok(all_bars) = bars() {
+        for bar in all_bars {
+            let hwnd = HWND(bar.hwnd as _);
+            unclip(hwnd, None);
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_SHOW);
+            }
+        }
+        println!("  [OK] Unclipped and showed all taskbars.");
+    }
+
+    // 3. Clear auto-hide on primary taskbar
+    let _ = set_state(0);
+
+    // 4. Restore monitor work areas
+    if let Ok(mons) = monitors() {
+        let areas: Vec<_> = mons.iter().map(|m| (m.bounds, m.bounds)).collect();
+        let _ = restore_areas(&areas);
+        println!("  [OK] Restored desktop work areas.");
+    }
+
+    println!("[SUCCESS] Windows taskbar and Explorer shell restored successfully.");
+    Ok(())
+}
+
+/// Dispatches CLI actions such as `--restore-shell` and `--taskbar-watchdog`.
+pub fn dispatch_cli() -> bool {
     let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(String::as_str) != Some("--taskbar-watchdog") {
-        return false;
+    if args.iter().any(|a| a == "--restore-shell") {
+        if let Err(e) = restore_shell_cli() {
+            eprintln!("Failed to restore shell: {e}");
+        }
+        return true;
     }
-    if let Err(error) = watchdog_args(&args[2..]) {
-        eprintln!("Taskbar watchdog: {error}");
+    if args.get(1).map(String::as_str) == Some("--taskbar-watchdog") {
+        if let Err(error) = watchdog_args(&args[2..]) {
+            eprintln!("Taskbar watchdog: {error}");
+        }
+        return true;
     }
-    true
+    false
 }
 
 fn watchdog_args(args: &[String]) -> Result<()> {

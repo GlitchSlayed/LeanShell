@@ -29,10 +29,10 @@ mod tray_host;
 mod util;
 
 fn main() {
-    if taskbar::dispatch_watchdog() {
+    if taskbar::dispatch_cli() {
         return;
     }
     if let Err(e) = app::run() {
-        util::error_box(&format!("Wisp could not start:\n{}", e.message()));
+        util::error_box(&format!("LeanShell could not start:\n{}", e.message()));
     }
 }

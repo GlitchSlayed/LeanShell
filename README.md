@@ -145,8 +145,13 @@ LeanShell enforces strict performance ceilings tracked in [`bench/BASELINE.md`](
 
 Because LeanShell interacts with shell hooks and hides the system taskbar:
 - Shell registration is strictly **per-user** (`HKCU`). LeanShell never touches `HKLM`.
-- Any crash or exit automatically triggers taskbar restoration.
-- Manual emergency recovery script:
+- Any crash or exit automatically triggers taskbar restoration (via watchdog supervisor).
+- **CLI Flag Escape Hatch**:
+  ```powershell
+  leanshell.exe --restore-shell
+  ```
+- **Emergency Key Chord**: Press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Esc</kbd> at any time to immediately restore the taskbar and cleanly exit LeanShell.
+- **Manual PowerShell Recovery Script**:
   ```powershell
   powershell -ExecutionPolicy Bypass -File scripts\restore-shell.ps1
   ```

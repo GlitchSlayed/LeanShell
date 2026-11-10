@@ -42,6 +42,15 @@ pub enum WindowListMode {
     Off,
 }
 
+/// Shell mode: running alongside Windows ("companion") or exclusive shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ShellMode {
+    #[default]
+    Companion,
+    Exclusive,
+}
+
 /// Keys missing from the user's file take their value from `config-0.3.toml`,
 /// then from the default config.
 #[derive(Debug, Clone, Deserialize)]
@@ -60,6 +69,14 @@ pub struct Config {
     pub file_search: bool,
     pub file_search_exclude: Vec<String>,
     pub window_list: WindowListMode,
+    #[serde(default)]
+    pub shell_mode: ShellMode,
+    #[serde(default = "default_true")]
+    pub watchdog: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -140,6 +157,15 @@ mod tests {
         assert!(default.dock && default.hide_taskbar);
         assert_eq!(default.dock_icon_size, 32);
         assert_eq!(default.position, Position::Bottom);
+        assert_eq!(default.shell_mode, ShellMode::Companion);
+        assert!(default.watchdog);
         assert!(Config::parse("dock = \"yes\"").is_err());
+    }
+
+    #[test]
+    fn shell_mode_and_watchdog_deserialize() {
+        let config = Config::parse("shell_mode = \"exclusive\"\nwatchdog = false").unwrap();
+        assert_eq!(config.shell_mode, ShellMode::Exclusive);
+        assert!(!config.watchdog);
     }
 }

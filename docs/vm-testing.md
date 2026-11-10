@@ -65,3 +65,21 @@ echo "options kvm ignore_msrs=1" | sudo tee /etc/modprobe.d/kvm.conf
 1. **Never test exclusive shell on the host.** Host session is Linux Fedora; all Windows shell tests must strictly run inside the VM.
 2. **Always test `scripts/restore-shell.ps1`** inside the VM to ensure the taskbar and default explorer shell can be restored if the process is terminated.
 3. If an input hook or shell replacement crashes or hangs the guest, use the snapshot rollback procedure above.
+
+---
+
+## 5. Emergency Recovery Mechanisms
+
+1. **CLI Flag (`--restore-shell`)**:
+   ```powershell
+   leanshell.exe --restore-shell
+   ```
+   Unclips and restores all hidden taskbars (`Shell_TrayWnd` and `Shell_SecondaryTrayWnd`), restores monitor work areas, resets the user's Winlogon Shell registry entry (`HKCU`), and exits.
+
+2. **Emergency Key Chord**:
+   Press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Esc</kbd> to immediately restore the taskbar and shut down LeanShell.
+
+3. **PowerShell Recovery Script**:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\restore-shell.ps1
+   ```
