@@ -2,7 +2,11 @@
 
 Working name: **LeanShell** (fork of [SumirSeth/wisp](https://github.com/SumirSeth/wisp), MIT). Rename freely.
 
-**Goal:** a Windows 11 shell that fully takes over the taskbar and Start menu, with a built-in launcher, a dock/panel UI, and ~0% idle resource use. Direct2D stays the default renderer; a Slint backend is optional.
+**Goals:**
+- **Total Shell Replacement:** Completely replace the Windows 11 shell so that `explorer.exe`'s taskbar and `StartMenuExperienceHost.exe` never even attempt to launch on boot/logon. Explorer remains available strictly on-demand for file management.
+- **Both Taskbar & Dock Modes:** Support both a persistent **Taskbar Mode** (edge-docked native Windows AppBar reserving work area for maximized windows) and a floating **Dock Mode** (auto-hiding, slide-up), both morphing into the launcher.
+- **Multi-Backend Architecture with Slint Option:** Decoupled `core` behind a swappable `Renderer` trait. Reference default is Direct2D (`ui-d2d`) for minimum resource footprint; optional Slint (`ui-slint`) backend supporting Skia and Vello renderers.
+- **~0% Idle Resource Use:** Native Win32 message-driven design with no web views, no runtimes, and zero background polling.
 
 **Principle:** every phase ships something usable and keeps a recovery path. The riskiest step (replacing explorer as the shell) comes last.
 

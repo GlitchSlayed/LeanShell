@@ -5,7 +5,7 @@
 <h1 align="center">LeanShell</h1>
 
 <p align="center">
-  <b>A lean, native Windows 11 shell, dock, and launcher replacement with ~0% idle resource use.</b><br>
+  <b>A lean, native Windows 11 shell, taskbar, dock, and Start replacement with ~0% idle resource use.</b><br>
   Forked from <a href="https://github.com/SumirSeth/wisp">SumirSeth/wisp</a> (MIT). See <a href="ROADMAP.md">ROADMAP.md</a> for phases and performance budgets.
 </p>
 
@@ -20,17 +20,30 @@
   <img src="assets/dock-to-launcher.webp" width="700" alt="The dock slides up, then grows into the launcher">
 </p>
 
-LeanShell replaces the Windows 11 taskbar and Start menu with a fast dock and built-in launcher. Press <kbd>Alt</kbd>+<kbd>Space</kbd> and the dock expands smoothly into the launcher.
-
-Written purely in Rust with native Win32 and Direct2D. No .NET runtime, no Electron/web views, and zero background polling.
+LeanShell is a lightweight, high-performance replacement for the Windows 11 taskbar, Start menu, and shell. It eliminates the heavy overhead of Windows shell experiences while delivering a responsive, keyboard-driven workflow.
 
 ---
 
-## Core Philosophy
+## Core Goals
 
-1. **Performance first:** ~0% idle CPU and minimal RAM footprint. A hidden dock consumes almost zero CPU cycles. Everything is message-driven rather than polling or timer-driven.
-2. **Never strand the user:** Shell replacement has automated recovery paths. If LeanShell quits or crashes, the standard Windows taskbar and Explorer shell are restored immediately. See [`scripts/restore-shell.ps1`](scripts/restore-shell.ps1).
-3. **Pure separation:** Core logic (`core`) is strictly isolated from Win32 platform bindings (`platform-win`) and UI rendering engines (`render`, `ui-d2d`, optional `ui-slint`).
+1. **Total `explorer.exe` Taskbar & Start Menu Replacement**
+   - **Never launch the defaults:** Beyond hiding running taskbars in companion mode, LeanShell's primary goal is exclusive shell replacement (`HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\Shell`).
+   - The default Windows taskbar (`explorer.exe`) and Start Menu (`StartMenuExperienceHost.exe`) never attempt to launch on logon.
+   - Explorer is preserved strictly on-demand as a file manager, freeing hundreds of megabytes of idle memory and background threads.
+   - Built-in launcher claims the Windows key to replace Start with instantaneous app launching, file search, and system commands.
+
+2. **Both Taskbar Mode & Dock Mode**
+   - **Taskbar Mode (AppBar Panel):** A persistent, full-width docked panel (bottom, top, left, or right) that registers as a native Windows AppBar (`ABM_NEW`, `ABM_SETPOS`). Maximized application windows automatically respect the panel's work area without overlap.
+   - **Dock Mode:** A floating, auto-hiding dock that slides up when your cursor touches the display edge and recedes when not in use.
+   - **Unified Morphing:** In either mode, triggering the hotkey (<kbd>Alt</kbd>+<kbd>Space</kbd> or <kbd>Win</kbd>) smoothly expands the bar/dock directly into the launcher.
+
+3. **Multi-Backend Architecture with Slint Option**
+   - **Decoupled Core:** Application models, grammar parsing, app indexing, and state logic live in a pure Rust `core` crate with zero Win32 or UI dependencies.
+   - **Direct2D (`ui-d2d` - Default & Reference):** Ultra-lean software renderer prioritizing minimal memory footprint (~20 MB) and true ~0% idle CPU and GPU use.
+   - **Slint (`ui-slint` - Optional Feature):** Modern declarative UI backend supporting Skia (default) and Vello (experimental GPU) rendering pipelines for flexible styling and animations.
+
+4. **~0% Idle Resource Footprint**
+   - Native Win32 message-driven architecture without runtimes, web views (Electron/CEF), or polling timers. If nothing is happening, LeanShell sleeps.
 
 ---
 
