@@ -11,7 +11,13 @@ keywords = ["dock", "launcher", "taskbar", "windows", "productivity"]
 categories = ["command-line-utilities"]
 
 [workspace]
-members = ["settings"]
+members = [
+    "core",
+    "platform-win",
+    "render",
+    "ui-d2d",
+    "settings",
+]
 
 [features]
 # Side-by-side build with its own data folder and window names.
@@ -20,6 +26,10 @@ nightly = []
 perf-trace = ["windows/Win32_System_Performance"]
 
 [dependencies]
+leanshell-core = { path = "core" }
+leanshell-platform-win = { path = "platform-win" }
+leanshell-render = { path = "render" }
+leanshell-ui-d2d = { path = "ui-d2d" }
 nucleo-matcher = "0.3"
 serde = { version = "1", features = ["derive"] }
 toml = "1"

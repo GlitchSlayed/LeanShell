@@ -3329,6 +3329,10 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 name = "leanshell"
 version = "0.6.1"
 dependencies = [
+ "leanshell-core",
+ "leanshell-platform-win",
+ "leanshell-render",
+ "leanshell-ui-d2d",
  "nucleo-matcher",
  "serde",
  "tempfile",
@@ -3340,10 +3344,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "leanshell-core"
+version = "0.6.1"
+dependencies = [
+ "nucleo-matcher",
+ "serde",
+ "toml 1.1.8+spec-1.1.0",
+]
+
+[[package]]
+name = "leanshell-platform-win"
+version = "0.6.1"
+dependencies = [
+ "leanshell-core",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+]
+
+[[package]]
+name = "leanshell-render"
+version = "0.6.1"
+dependencies = [
+ "leanshell-core",
+]
+
+[[package]]
 name = "leanshell-settings"
 version = "0.6.1"
 dependencies = [
  "gpui-kit",
+ "leanshell-core",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3353,6 +3383,17 @@ dependencies = [
  "windows 0.62.2",
  "winresource",
  "zip",
+]
+
+[[package]]
+name = "leanshell-ui-d2d"
+version = "0.6.1"
+dependencies = [
+ "leanshell-core",
+ "leanshell-render",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+ "windows-numerics 0.3.1",
 ]
 
 [[package]]

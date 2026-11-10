@@ -1,0 +1,24 @@
+[package]
+name = "leanshell-ui-d2d"
+version = "0.6.1"
+edition = "2024"
+description = "Direct2D software renderer backend for LeanShell"
+license = "MIT"
+authors = ["Sumir Seth", "LeanShell Contributors"]
+
+[dependencies]
+leanshell-core = { path = "../core" }
+leanshell-render = { path = "../render" }
+windows-core = "0.62"
+windows-numerics = "0.3"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_UI_WindowsAndMessaging",
+]

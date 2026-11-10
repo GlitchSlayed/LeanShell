@@ -1,0 +1,12 @@
+[package]
+name = "leanshell-core"
+version = "0.6.1"
+edition = "2024"
+description = "Core logic, models, search grammar, and configuration for LeanShell"
+license = "MIT"
+authors = ["Sumir Seth", "LeanShell Contributors"]
+
+[dependencies]
+nucleo-matcher = "0.3"
+serde = { version = "1", features = ["derive"] }
+toml = "1"

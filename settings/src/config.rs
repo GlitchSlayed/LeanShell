@@ -4,11 +4,7 @@ use std::{io::Write, path::PathBuf};
 
 use toml_edit::{DocumentMut, Item, Value};
 
-/// The launcher creates its config from the same file.
-pub const DEFAULT_CONFIG: &str = include_str!("../../src/default-config.toml");
-/// Values for missing keys that differ from the default config. The launcher
-/// reads the same file.
-const MISSING_KEYS: &str = include_str!("../../src/config-0.3.toml");
+pub use leanshell_core::config::{DEFAULT_CONFIG, MISSING_KEYS};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {

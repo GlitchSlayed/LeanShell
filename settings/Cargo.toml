@@ -11,6 +11,7 @@ publish = false
 nightly = []
 
 [dependencies]
+leanshell-core = { path = "../core" }
 gpui-kit = { version = "0.8", default-features = false, features = ["component"] }
 toml_edit = "0.23"
 serde = { version = "1", features = ["derive"] }

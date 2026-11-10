@@ -20,7 +20,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use crate::commands::{self, Command, Commands};
-use crate::config::{Config, Position, Theme};
+use crate::config::{self, Config, Position, Theme};
 use crate::dock::space::DockSpace;
 use crate::dock::{self, Dock};
 use crate::drag::{self, Payload};
@@ -226,9 +226,9 @@ pub fn run() -> Result<()> {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         )?;
 
-        // Config::load creates the config on first run.
-        let first_run = !Config::path().exists();
-        let (config, config_error) = Config::load();
+        // config::load creates the config on first run.
+        let first_run = !config::path().exists();
+        let (config, config_error) = config::load();
         let (events_tx, events_rx) = channel();
         let (files_tx, files_rx) = channel();
         // Icons are drawn at 32 DIPs; extract them at the system DPI's pixel size.
@@ -237,7 +237,7 @@ pub fn run() -> Result<()> {
         let launcher = Launcher {
             hwnd,
             config,
-            config_mtime: Config::modified(),
+            config_mtime: config::modified(),
             registered_hotkey: None,
             tray_icon: small_icon,
             palette: Palette::new(true, true),
@@ -566,12 +566,12 @@ impl Launcher {
 
     fn reload_config_if_changed(&mut self) {
         let _span = util::perf::Span::new("config");
-        let mtime = Config::modified();
+        let mtime = config::modified();
         if mtime == self.config_mtime {
             return;
         }
         self.config_mtime = mtime;
-        let (config, error) = Config::load();
+        let (config, error) = config::load();
         if let Some(error) = error {
             // Keep the last valid config so a read or parse error does not change it.
             tray::notify(self.hwnd, "Wisp config", &error, true);
@@ -1842,7 +1842,7 @@ impl Launcher {
                 }
             }
             tray::CMD_CONFIG => {
-                let path = Config::path();
+                let path = config::path();
                 let path = path.to_string_lossy();
                 // Notepad can edit the config if Windows cannot open .toml files.
                 if launch::open(&path).is_err() {

@@ -1,0 +1,79 @@
+//! Launch history for ranking frequently and recently launched apps higher.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct Usage {
+    pub count: u32,
+    pub last: u64,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+pub struct History {
+    #[serde(default)]
+    apps: HashMap<String, Usage>,
+    #[serde(skip)]
+    path: PathBuf,
+}
+
+impl History {
+    pub fn load_from_path(path: PathBuf) -> Self {
+        let mut history: History = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| toml::from_str(&text).ok())
+            .unwrap_or_default();
+        history.path = path;
+        history
+    }
+
+    pub fn record(&mut self, id: &str, now: u64) {
+        let usage = self.apps.entry(id.to_string()).or_default();
+        usage.count += 1;
+        usage.last = now;
+        // Write to a temporary file so a crash during the write preserves existing history.
+        if !self.path.as_os_str().is_empty()
+            && let Ok(text) = toml::to_string(self)
+        {
+            let tmp = self.path.with_extension("toml.tmp");
+            if std::fs::write(&tmp, text).is_ok() {
+                let _ = std::fs::rename(&tmp, &self.path);
+            }
+        }
+    }
+
+    pub fn get_usage(&self, id: &str) -> Option<&Usage> {
+        self.apps.get(id)
+    }
+
+    /// Increases an app's score with its launch count and recent use.
+    pub fn boost(&self, id: &str, now: u64) -> u32 {
+        let Some(usage) = self.apps.get(id) else {
+            return 0;
+        };
+        let recency = match now.saturating_sub(usage.last) {
+            age if age < 60 * 60 => 4.0,
+            age if age < 24 * 60 * 60 => 2.0,
+            age if age < 7 * 24 * 60 * 60 => 1.0,
+            _ => 0.5,
+        };
+        ((1.0 + usage.count as f64).ln() * 12.0 * recency) as u32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_recording_and_boost() {
+        let mut history = History::default();
+        let now = 10000;
+        history.record("app1", now);
+        assert_eq!(history.get_usage("app1").unwrap().count, 1);
+        assert!(history.boost("app1", now) > 0);
+        assert_eq!(history.boost("nonexistent", now), 0);
+    }
+}

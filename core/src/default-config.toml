@@ -1,0 +1,52 @@
+# Wisp config. Changes apply the next time the launcher opens.
+
+# Shortcut to show or hide the launcher.
+# Examples: "Alt+Space", "Ctrl+Shift+Space", "Win+Alt+R", "Ctrl+F12"
+hotkey = "Alt+Space"
+
+# Results visible at once. Scroll to see more.
+max_results = 8
+
+# "system", "dark" or "light"
+theme = "system"
+
+# Launcher backdrop: "acrylic", "mica" or "solid"
+backdrop = "acrylic"
+
+# Where the launcher opens: "bottom" for a search box at the bottom of the
+# screen with results above it, where the dock grows into the launcher; or
+# "center".
+position = "bottom"
+
+# Show recently launched apps when the search box is empty.
+show_recent = true
+
+# Web search URL. Wisp replaces {query} with the encoded search text.
+search_url = "https://www.google.com/search?q={query}"
+
+# Search file names in the Windows Search index. Start a query with ? to
+# search files only.
+file_search = true
+
+# Folder names that file search skips. It always skips files and folders
+# whose names start with a dot, such as .git.
+file_search_exclude = ["node_modules", "AppData", "site-packages", "__pycache__", "venv", "target", "dist", "build", "Cache", "Code Cache", "GPUCache", "Service Worker", "IndexedDB", "Extensions"]
+
+# Hide the Windows taskbar while Wisp runs. The taskbar comes back when Wisp
+# quits.
+hide_taskbar = true
+
+# Show the dock: running apps, notification icons, volume, battery and the
+# clock. It appears when the pointer touches the bottom edge of a screen.
+dock = true
+
+# Hide the dock until the pointer touches the bottom edge of a screen. With
+# false, the dock stays on the main screen and windows stop above it while the
+# taskbar is hidden.
+dock_autohide = true
+# App window list shown when hovering a running app icon:
+# "multiple" (only when the app has multiple windows), "always", or "off".
+window_list = "multiple"
+
+# App icons in the dock, in DIPs (24 to 40). The default is 32.
+dock_icon_size = 32

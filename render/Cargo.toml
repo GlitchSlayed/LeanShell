@@ -1,0 +1,10 @@
+[package]
+name = "leanshell-render"
+version = "0.6.1"
+edition = "2024"
+description = "Renderer trait and frame description models for LeanShell"
+license = "MIT"
+authors = ["Sumir Seth", "LeanShell Contributors"]
+
+[dependencies]
+leanshell-core = { path = "../core" }
