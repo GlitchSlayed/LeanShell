@@ -1,11 +1,11 @@
 [package]
-name = "wisp"
+name = "leanshell"
 version = "0.6.1"
 edition = "2024"
-description = "A dock and a launcher for Windows"
+description = "A Windows 11 shell, dock, and launcher replacement with ~0% idle resource use"
 license = "MIT"
-authors = ["Sumir Seth"]
-repository = "https://github.com/SumirSeth/wisp"
+authors = ["Sumir Seth", "LeanShell Contributors"]
+repository = "https://github.com/vanshdatta/LeanShell"
 readme = "README.md"
 keywords = ["dock", "launcher", "taskbar", "windows", "productivity"]
 categories = ["command-line-utilities"]
@@ -91,7 +91,7 @@ strip = true
 
 # Keep the launcher on the release profile above.
 [profile.release.package]
-wisp-settings = { opt-level = "z" }
+leanshell-settings = { opt-level = "z" }
 
 # These crates are exclusive to Settings. Shared dependencies retain opt-level 3.
 # Recheck this list when adding launcher dependencies.

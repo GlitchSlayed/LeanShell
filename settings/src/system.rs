@@ -31,7 +31,7 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
             let scoop = std::env::var_os("SCOOP").map(PathBuf::from);
             let launcher = crate::install::autostart_path(&launcher, scoop.as_deref());
             if !launcher.is_file() {
-                return Err("Place wisp.exe next to wisp-settings.exe, then try again.".into());
+                return Err("Place leanshell.exe (or wisp.exe) next to leanshell-settings.exe, then try again.".into());
             }
             let command = wide(format!("\"{}\"", launcher.display()));
             RegSetKeyValueW(
@@ -43,7 +43,7 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
                 (command.len() * 2) as u32,
             )
             .ok()
-            .map_err(|error| format!("Cannot start Wisp with Windows: {error}"))
+            .map_err(|error| format!("Cannot start LeanShell with Windows: {error}"))
         } else {
             let status = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE);
             if status == ERROR_FILE_NOT_FOUND {
@@ -59,8 +59,16 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
 fn launcher_path(settings_exe: &Path) -> Result<PathBuf, String> {
     settings_exe
         .parent()
-        .map(|parent| parent.join("wisp.exe"))
-        .ok_or_else(|| "Cannot find the Wisp folder.".into())
+        .map(|parent| {
+            let primary = parent.join("leanshell.exe");
+            if primary.is_file() {
+                primary
+            } else {
+                let fallback = parent.join("wisp.exe");
+                if fallback.is_file() { fallback } else { primary }
+            }
+        })
+        .ok_or_else(|| "Cannot find the LeanShell folder.".into())
 }
 
 /// Colors the Windows title bar of this app's window to match the page.

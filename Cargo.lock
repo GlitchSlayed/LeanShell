@@ -3326,6 +3326,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
+name = "leanshell"
+version = "0.6.1"
+dependencies = [
+ "nucleo-matcher",
+ "serde",
+ "tempfile",
+ "toml 1.1.8+spec-1.1.0",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+ "windows-numerics 0.3.1",
+ "winresource",
+]
+
+[[package]]
+name = "leanshell-settings"
+version = "0.6.1"
+dependencies = [
+ "gpui-kit",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "toml 1.1.8+spec-1.1.0",
+ "toml_edit 0.23.10+spec-1.0.0",
+ "windows 0.62.2",
+ "winresource",
+ "zip",
+]
+
+[[package]]
 name = "lebe"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7899,36 +7929,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d129932f4644ac2396cb456385cbf9e63b5b30c6e8dc4820bdca4eb082037a5"
 dependencies = [
  "winapi",
-]
-
-[[package]]
-name = "wisp"
-version = "0.6.1"
-dependencies = [
- "nucleo-matcher",
- "serde",
- "tempfile",
- "toml 1.1.8+spec-1.1.0",
- "windows 0.62.2",
- "windows-core 0.62.2",
- "windows-numerics 0.3.1",
- "winresource",
-]
-
-[[package]]
-name = "wisp-settings"
-version = "0.6.1"
-dependencies = [
- "gpui-kit",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "toml 1.1.8+spec-1.1.0",
- "toml_edit 0.23.10+spec-1.0.0",
- "windows 0.62.2",
- "winresource",
- "zip",
 ]
 
 [[package]]

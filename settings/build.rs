@@ -10,6 +10,8 @@ fn main() {
         );
         res.set("ProductName", if nightly { "Wisp Nightly" } else { "Wisp" });
         res.set("LegalCopyright", "Copyright (c) 2026 Sumir Seth. MIT License.");
-        res.compile().expect("failed to embed Windows resources");
+        if let Err(e) = res.compile() {
+            println!("cargo:warning=failed to embed Windows resources: {e}");
+        }
     }
 }

@@ -4,18 +4,22 @@
 use windows::core::{PCWSTR, w};
 
 pub const NIGHTLY: bool = cfg!(feature = "nightly");
-pub const NAME: &str = if NIGHTLY { "Wisp Nightly" } else { "Wisp" };
+pub const NAME: &str = if NIGHTLY { "LeanShell Nightly" } else { "LeanShell" };
 /// Folder under `%APPDATA%`.
-pub const DATA_DIR: &str = if NIGHTLY { "wisp-nightly" } else { "wisp" };
+pub const DATA_DIR: &str = if NIGHTLY { "leanshell-nightly" } else { "leanshell" };
 pub const LAUNCHER_CLASS: PCWSTR = if NIGHTLY {
-    w!("Wisp.Nightly.Launcher")
+    w!("LeanShell.Nightly.Launcher")
 } else {
-    w!("Wisp.Launcher")
+    w!("LeanShell.Launcher")
 };
 pub const INSTANCE_MUTEX: PCWSTR = if NIGHTLY {
-    w!(r"Local\Wisp.Nightly.Launcher.SingleInstance")
+    w!(r"Local\LeanShell.Nightly.Launcher.SingleInstance")
 } else {
-    w!(r"Local\Wisp.Launcher.SingleInstance")
+    w!(r"Local\LeanShell.Launcher.SingleInstance")
 };
 /// Value name under the Run key for Start with Windows.
-pub const RUN_VALUE: PCWSTR = if NIGHTLY { w!("Wisp Nightly") } else { w!("Wisp") };
+pub const RUN_VALUE: PCWSTR = if NIGHTLY {
+    w!("LeanShell Nightly")
+} else {
+    w!("LeanShell")
+};
