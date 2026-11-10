@@ -20,7 +20,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use crate::commands::{self, Command, Commands};
-use crate::config::{self, Config, Position, Theme};
+use crate::config::{self, Config, DisplayMode, Position, Theme};
 use crate::dock::space::DockSpace;
 use crate::dock::{self, Dock};
 use crate::drag::{self, Payload};
@@ -601,7 +601,9 @@ impl Launcher {
         if self.dock.as_ref().is_some_and(|d| d.shared() != self.bottom()) {
             self.dock = None;
         }
-        if !self.config.dock {
+        if self.config.display_mode == DisplayMode::Center
+            || (!self.config.dock && self.config.display_mode == DisplayMode::Dock)
+        {
             self.dock = None;
             self.sync_reserve();
             return;
@@ -626,23 +628,32 @@ impl Launcher {
             dock.set_app_icon_size(self.config.dock_icon_size as u32);
             // Notification icons need a home while the taskbar is hidden.
             dock.set_tray(self.taskbar.as_ref().is_some_and(TaskbarHider::is_active));
-            dock.set_autohide(self.config.dock_autohide);
+            let autohide = if self.config.display_mode == DisplayMode::Panel {
+                false
+            } else {
+                self.config.dock_autohide
+            };
+            dock.set_autohide(autohide);
             if self.visible { dock.hide() } else { dock.show() }
         }
         self.sync_reserve();
     }
 
-    /// Keeps maximized windows above a dock that stays visible while the
+    /// Keeps maximized windows above a dock or panel that stays visible while the
     /// taskbar is hidden. A shown taskbar keeps its own space.
     fn sync_reserve(&mut self) {
+        let is_panel = self.config.display_mode == DisplayMode::Panel;
+        let is_dock = self.config.display_mode == DisplayMode::Dock && self.config.dock;
         let hidden = self.taskbar.as_ref().is_some_and(TaskbarHider::is_active);
-        let wanted = hidden && self.dock.as_ref().is_some_and(Dock::stays_visible);
-        let reserved_height = self
-            .dock
-            .as_ref()
-            .map_or(dock::DEFAULT_RESERVED_HEIGHT, Dock::reserved_height);
+        let wanted = hidden && (is_panel || (is_dock && self.dock.as_ref().is_some_and(Dock::stays_visible)));
+        let reserved_thickness = self.config.panel_thickness.map(|t| t as f32).unwrap_or_else(|| {
+            self.dock
+                .as_ref()
+                .map_or(dock::DEFAULT_RESERVED_HEIGHT, Dock::reserved_height)
+        });
+        let edge = crate::dock::space::edge_to_win32(self.config.panel_edge);
         // Before the space exists, so a re-hide while Windows places it
-        // cannot take the bottom back.
+        // cannot take the edge back.
         if wanted && let Some(hider) = &mut self.taskbar {
             hider.keep_bottom(true);
         }
@@ -650,12 +661,12 @@ impl Launcher {
             self.dock_space = None;
         } else if let Some(space) = &self.dock_space {
             // The taskbar hider may have just changed the work area.
-            space.set_height(reserved_height);
+            space.set_thickness(reserved_thickness);
             space.check();
         } else {
-            match DockSpace::new(reserved_height) {
+            match DockSpace::new(reserved_thickness, edge) {
                 Ok(space) => self.dock_space = Some(space),
-                Err(e) => eprintln!("could not keep space for the dock: {e}"),
+                Err(e) => eprintln!("could not keep space for the panel: {e}"),
             }
         }
         if let Some(hider) = &mut self.taskbar {
@@ -967,7 +978,10 @@ impl Launcher {
 
     /// The query box sits at the bottom of the screen and results stack upward.
     fn bottom(&self) -> bool {
-        self.config.position == Position::Bottom
+        self.config.display_mode != DisplayMode::Center
+            && (self.config.position == Position::Bottom
+                || self.config.display_mode == DisplayMode::Panel
+                || self.config.display_mode == DisplayMode::Dock)
     }
 
     /// The launcher's height in DIPs.

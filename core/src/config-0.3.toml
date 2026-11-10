@@ -6,4 +6,6 @@ position = "center"
 dock = false
 hide_taskbar = false
 shell_mode = "companion"
+display_mode = "center"
+panel_edge = "bottom"
 watchdog = true

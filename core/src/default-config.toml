@@ -55,6 +55,12 @@ dock_icon_size = 32
 # or "exclusive" (primary Windows shell).
 shell_mode = "companion"
 
+# Display mode: "dock" (floating auto-hiding dock), "panel" (edge-docked bar reserving screen work area), or "center" (launcher only).
+display_mode = "dock"
+
+# Screen edge for the panel: "bottom", "top", "left", or "right".
+panel_edge = "bottom"
+
 # Watchdog supervisor process to automatically restore the taskbar if LeanShell exits unexpectedly.
 watchdog = true
 

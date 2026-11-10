@@ -13,7 +13,7 @@ pub mod search;
 
 pub use calc::{evaluate as eval_calc, format as format_calc};
 pub use command::{MediaControl, PowerAction, SystemCommand};
-pub use config::{Backdrop, Config, Position, ShellMode, Theme, WindowListMode};
+pub use config::{Backdrop, Config, DisplayMode, PanelEdge, Position, ShellMode, Theme, WindowListMode};
 pub use history::History;
 pub use model::{AppEntry, Desktops, FileHit, IconPixels, Pin, TrayIcon, TrayKey};
 pub use search::{Action, Drill, FileScope, Kind, ResultItem, Searcher};

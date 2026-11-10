@@ -15,8 +15,8 @@ use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Shell::{
-    ABE_BOTTOM, ABM_GETTASKBARPOS, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, ABN_POSCHANGED, APPBARDATA,
-    SHAllocShared, SHAppBarMessage, SHFreeShared, SHLockShared, SHUnlockShared,
+    ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_GETTASKBARPOS, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS,
+    ABN_POSCHANGED, APPBARDATA, SHAllocShared, SHAppBarMessage, SHFreeShared, SHLockShared, SHUnlockShared,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Error, HRESULT, Result, w};
@@ -32,9 +32,20 @@ const WM_SET_HEIGHT: u32 = WM_APP + 42;
 const CHECK_TIMER: usize = 1;
 const CHECK_MS: u32 = 1000;
 
+pub fn edge_to_win32(edge: leanshell_core::config::PanelEdge) -> u32 {
+    match edge {
+        leanshell_core::config::PanelEdge::Bottom => ABE_BOTTOM,
+        leanshell_core::config::PanelEdge::Top => ABE_TOP,
+        leanshell_core::config::PanelEdge::Left => ABE_LEFT,
+        leanshell_core::config::PanelEdge::Right => ABE_RIGHT,
+    }
+}
+
 thread_local! {
-    /// The space's height in DIPs, for the window procedure.
-    static HEIGHT: Cell<f32> = const { Cell::new(0.0) };
+    /// The space's thickness in DIPs, for the window procedure.
+    static THICKNESS: Cell<f32> = const { Cell::new(0.0) };
+    /// The screen edge to dock against.
+    static EDGE: Cell<u32> = const { Cell::new(ABE_BOTTOM) };
     /// The strip last claimed, in physical pixels.
     static STRIP: Cell<RECT> = const { Cell::new(RECT { left: 0, top: 0, right: 0, bottom: 0 }) };
     /// The primary screen's bounds and the strip's height in pixels when it
@@ -58,12 +69,12 @@ pub struct DockSpace {
 }
 
 impl DockSpace {
-    /// Keeps `height` DIPs free at the bottom of the primary screen.
-    pub fn new(height: f32) -> Result<Self> {
+    /// Keeps `thickness` DIPs free at the designated edge of the primary screen.
+    pub fn new(thickness: f32, edge: u32) -> Result<Self> {
         let (ready, started) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("dock space".into())
-            .spawn(move || run(height, ready))
+            .spawn(move || run(thickness, edge, ready))
             .map_err(|e| Error::new(E_FAIL, e.to_string()))?;
         match started.recv() {
             Ok(Ok(hwnd)) => Ok(Self {
@@ -89,12 +100,12 @@ impl DockSpace {
         }
     }
 
-    pub fn set_height(&self, height: f32) {
+    pub fn set_thickness(&self, thickness: f32) {
         unsafe {
             let _ = PostMessageW(
                 Some(self.hwnd),
                 WM_SET_HEIGHT,
-                WPARAM(height.to_bits() as usize),
+                WPARAM(thickness.to_bits() as usize),
                 LPARAM(0),
             );
         }
@@ -124,8 +135,9 @@ impl Drop for DockSpace {
     }
 }
 
-fn run(height: f32, ready: mpsc::Sender<std::result::Result<usize, HRESULT>>) {
-    HEIGHT.set(height);
+fn run(thickness: f32, edge: u32, ready: mpsc::Sender<std::result::Result<usize, HRESULT>>) {
+    THICKNESS.set(thickness);
+    EDGE.set(edge);
     let hwnd = match create() {
         Ok(hwnd) => hwnd,
         Err(e) => {
@@ -207,14 +219,20 @@ fn check(hwnd: HWND) {
 /// Whether the primary work area stops above the strip. Another app bar
 /// below the strip is fine.
 fn kept() -> bool {
-    primary().is_none_or(|(_, work, _)| work.bottom <= STRIP.get().top)
+    let strip = STRIP.get();
+    primary().is_none_or(|(_, work, _)| match EDGE.get() {
+        ABE_TOP => work.top >= strip.bottom,
+        ABE_LEFT => work.left >= strip.right,
+        ABE_RIGHT => work.right <= strip.left,
+        _ => work.bottom <= strip.top,
+    })
 }
 
 fn bar(hwnd: HWND) -> APPBARDATA {
     APPBARDATA {
         cbSize: size_of::<APPBARDATA>() as u32,
         hWnd: hwnd,
-        uEdge: ABE_BOTTOM,
+        uEdge: EDGE.get(),
         ..Default::default()
     }
 }
@@ -313,7 +331,7 @@ fn send(message: u32, data: &mut APPBARDATA) -> usize {
     result
 }
 
-/// The primary screen's bounds and work area, and its height for the space in
+/// The primary screen's bounds and work area, and its thickness for the space in
 /// physical pixels.
 fn primary() -> Option<(RECT, RECT, i32)> {
     unsafe {
@@ -327,33 +345,51 @@ fn primary() -> Option<(RECT, RECT, i32)> {
         }
         let (mut x, mut y) = (96, 96);
         let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y);
-        let height = (HEIGHT.get() * y.max(96) as f32 / 96.0).round() as i32;
-        Some((info.rcMonitor, info.rcWork, height))
+        let dpi = match EDGE.get() {
+            ABE_LEFT | ABE_RIGHT => x.max(96),
+            _ => y.max(96),
+        };
+        let thickness = (THICKNESS.get() * dpi as f32 / 96.0).round() as i32;
+        Some((info.rcMonitor, info.rcWork, thickness))
     }
 }
 
-/// Claims a strip at the bottom of the primary screen, above any app bar
+/// Claims a strip at the designated edge of the primary screen, above any app bar
 /// already there, at the screen's current scale.
 fn place(hwnd: HWND) {
-    let Some((monitor, _, height)) = primary() else { return };
+    let Some((monitor, _, thickness)) = primary() else {
+        return;
+    };
     let mut data = bar(hwnd);
     data.rc = monitor;
-    data.rc.top = data.rc.bottom - height;
-    // Windows moves the strip up past other app bars on the same edge.
+    match EDGE.get() {
+        ABE_TOP => data.rc.bottom = data.rc.top + thickness,
+        ABE_LEFT => data.rc.right = data.rc.left + thickness,
+        ABE_RIGHT => data.rc.left = data.rc.right - thickness,
+        _ => data.rc.top = data.rc.bottom - thickness,
+    }
+    // Windows moves the strip past other app bars on the same edge.
     send(ABM_QUERYPOS, &mut data);
-    data.rc.top = data.rc.bottom - height;
+    match EDGE.get() {
+        ABE_TOP => data.rc.bottom = data.rc.top + thickness,
+        ABE_LEFT => data.rc.right = data.rc.left + thickness,
+        ABE_RIGHT => data.rc.left = data.rc.right - thickness,
+        _ => data.rc.top = data.rc.bottom - thickness,
+    }
     send(ABM_SETPOS, &mut data);
     // The window itself never moves or shows, so it needs no
     // ABM_WINDOWPOSCHANGED.
     STRIP.set(data.rc);
-    PLACED_FOR.set((monitor, height));
+    PLACED_FOR.set((monitor, thickness));
 }
 
-/// Places the strip again only if the screen or strip height changed, so a
+/// Places the strip again only if the screen or strip thickness changed, so a
 /// broadcast caused by the strip itself does not repeat forever.
 fn place_if_changed(hwnd: HWND) {
-    let Some((monitor, _, height)) = primary() else { return };
-    if PLACED_FOR.get() != (monitor, height) {
+    let Some((monitor, _, thickness)) = primary() else {
+        return;
+    };
+    if PLACED_FOR.get() != (monitor, thickness) {
         place(hwnd);
     }
 }
@@ -370,7 +406,7 @@ unsafe extern "system" fn space_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
             LRESULT(0)
         }
         WM_SET_HEIGHT => {
-            HEIGHT.set(f32::from_bits(wparam.0 as u32));
+            THICKNESS.set(f32::from_bits(wparam.0 as u32));
             place_if_changed(hwnd);
             LRESULT(0)
         }

@@ -51,6 +51,30 @@ pub enum ShellMode {
     Exclusive,
 }
 
+/// Layout and shell presentation modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DisplayMode {
+    /// Floating, auto-hiding dock that slides up on edge touch.
+    #[default]
+    Dock,
+    /// Persistent edge-docked panel/taskbar that reserves screen work area via AppBar.
+    Panel,
+    /// Center launcher only (no dock or panel).
+    Center,
+}
+
+/// Screen edge on which the panel or dock is positioned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PanelEdge {
+    #[default]
+    Bottom,
+    Top,
+    Left,
+    Right,
+}
+
 /// Keys missing from the user's file take their value from `config-0.3.toml`,
 /// then from the default config.
 #[derive(Debug, Clone, Deserialize)]
@@ -71,6 +95,11 @@ pub struct Config {
     pub window_list: WindowListMode,
     #[serde(default)]
     pub shell_mode: ShellMode,
+    #[serde(default)]
+    pub display_mode: DisplayMode,
+    #[serde(default)]
+    pub panel_edge: PanelEdge,
+    pub panel_thickness: Option<u32>,
     #[serde(default = "default_true")]
     pub watchdog: bool,
 }
@@ -167,5 +196,17 @@ mod tests {
         let config = Config::parse("shell_mode = \"exclusive\"\nwatchdog = false").unwrap();
         assert_eq!(config.shell_mode, ShellMode::Exclusive);
         assert!(!config.watchdog);
+    }
+
+    #[test]
+    fn display_mode_and_panel_edge_deserialize() {
+        let config = Config::parse("display_mode = \"panel\"\npanel_edge = \"top\"\npanel_thickness = 48").unwrap();
+        assert_eq!(config.display_mode, DisplayMode::Panel);
+        assert_eq!(config.panel_edge, PanelEdge::Top);
+        assert_eq!(config.panel_thickness, Some(48));
+
+        let config2 = Config::parse("display_mode = \"center\"").unwrap();
+        assert_eq!(config2.display_mode, DisplayMode::Center);
+        assert_eq!(config2.panel_edge, PanelEdge::Bottom);
     }
 }
