@@ -13,6 +13,8 @@ jobs:
       # rust-toolchain.toml selects the Rust version.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # Nightly names and the perf-trace hooks compile only with these features.

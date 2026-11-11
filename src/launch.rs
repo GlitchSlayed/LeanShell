@@ -85,7 +85,7 @@ pub fn settings(welcome: bool) -> Result<()> {
                 )
             };
             if answer == IDYES
-                && let Err(error) = open("https://github.com/SumirSeth/wisp/releases/latest")
+                && let Err(error) = open("https://github.com/GlitchSlayed/LeanShell/releases/latest")
             {
                 crate::util::error_box(&format!("Could not open the download page: {}", error.message()));
             }

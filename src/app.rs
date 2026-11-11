@@ -160,7 +160,7 @@ pub fn run() -> Result<()> {
             }
             return Err(windows::core::Error::new(
                 E_FAIL,
-                "Wisp is running, but its launcher window was not found within 3 s.",
+                "LeanShell is running, but its launcher window was not found within 3 s.",
             ));
         }
         if flag("--quit") {
@@ -332,7 +332,7 @@ pub fn run() -> Result<()> {
                 }
             }
             if let Some(error) = config_error {
-                tray::notify(l.hwnd, "Wisp config", &error, true);
+                tray::notify(l.hwnd, "LeanShell config", &error, true);
             }
             if flag("--show") {
                 l.show();
@@ -531,7 +531,7 @@ impl Launcher {
             Ok(hotkey) => hotkey,
             Err(error) => {
                 if report_errors {
-                    tray::notify(self.hwnd, "Wisp config", &error, true);
+                    tray::notify(self.hwnd, "LeanShell config", &error, true);
                 }
                 return;
             }
@@ -584,7 +584,7 @@ impl Launcher {
         let (config, error) = config::load();
         if let Some(error) = error {
             // Keep the last valid config so a read or parse error does not change it.
-            tray::notify(self.hwnd, "Wisp config", &error, true);
+            tray::notify(self.hwnd, "LeanShell config", &error, true);
             return;
         }
         self.config = config;
@@ -1904,7 +1904,7 @@ impl Launcher {
             .collect();
         if !new.is_empty() {
             let message = new.iter().map(|e| e.as_str()).collect::<Vec<_>>().join("\n");
-            tray::notify(self.hwnd, "Wisp surfaces", &message, true);
+            tray::notify(self.hwnd, "LeanShell surfaces", &message, true);
         }
         self.surface_errors = self.surfaces.errors.clone();
     }

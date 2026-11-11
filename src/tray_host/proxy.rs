@@ -94,7 +94,7 @@ fn setup(shared: Arc<Shared>) -> Result<Host, String> {
         let mutex = CreateMutexW(None, false, w!(r"Local\Wisp.TrayHost")).map_err(|e| e.message())?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
             let _ = CloseHandle(mutex);
-            return Err("Another Wisp already hosts the notification area".into());
+            return Err("Another LeanShell already hosts the notification area".into());
         }
         let instance: HINSTANCE = GetModuleHandleW(None).map_err(|e| e.message())?.into();
         let procs: [(PCWSTR, WNDPROC); 2] = [
@@ -118,7 +118,7 @@ fn setup(shared: Arc<Shared>) -> Result<Host, String> {
         let control = CreateWindowExW(
             WS_EX_TOOLWINDOW,
             CONTROL_CLASS,
-            w!("Wisp tray host"),
+            w!("LeanShell tray host"),
             WS_POPUP,
             0,
             0,

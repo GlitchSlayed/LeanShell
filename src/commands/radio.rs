@@ -23,7 +23,7 @@ pub fn set(kind: RadioKind, name: &str, on: bool) -> Result<(), String> {
     match radio.SetStateAsync(state).and_then(|op| op.join()) {
         Ok(status) if status == RadioAccessStatus::Allowed => Ok(()),
         Ok(_) => Err(format!(
-            "Windows did not allow Wisp to change {name}. Check Settings > Privacy & security > Radios."
+            "Windows did not allow LeanShell to change {name}. Check Settings > Privacy & security > Radios."
         )),
         Err(error) => Err(error.message()),
     }

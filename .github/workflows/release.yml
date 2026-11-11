@@ -16,6 +16,8 @@ jobs:
       # rust-toolchain.toml selects the Rust version.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
       - run: cargo test --workspace
       - run: cargo build --release --workspace
       - name: Package
@@ -64,9 +66,19 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
-          gh release create "${{ github.ref_name }}" `
-            "leanshell-${{ github.ref_name }}-x86_64-windows.zip" `
-            "leanshell-${{ github.ref_name }}-x86_64.exe" `
-            "leanshell-settings-${{ github.ref_name }}-x86_64.exe" `
-            SHA256SUMS.txt `
-            --title "$version early experimental" --notes-file notes.md
+          $releaseExists = gh release view "${{ github.ref_name }}" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "${{ github.ref_name }}" `
+              "leanshell-${{ github.ref_name }}-x86_64-windows.zip" `
+              "leanshell-${{ github.ref_name }}-x86_64.exe" `
+              "leanshell-settings-${{ github.ref_name }}-x86_64.exe" `
+              SHA256SUMS.txt --clobber
+            gh release edit "${{ github.ref_name }}" --title "$version early experimental" --notes-file notes.md
+          } else {
+            gh release create "${{ github.ref_name }}" `
+              "leanshell-${{ github.ref_name }}-x86_64-windows.zip" `
+              "leanshell-${{ github.ref_name }}-x86_64.exe" `
+              "leanshell-settings-${{ github.ref_name }}-x86_64.exe" `
+              SHA256SUMS.txt `
+              --title "$version early experimental" --notes-file notes.md
+          }

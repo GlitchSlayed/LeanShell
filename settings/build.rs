@@ -6,7 +6,7 @@ fn main() {
         res.set_icon_with_id("../assets/wisp.ico", "1");
         res.set(
             "FileDescription",
-            &format!("Wisp Settings{}", if nightly { " (Nightly)" } else { "" }),
+            &format!("LeanShell Settings{}", if nightly { " (Nightly)" } else { "" }),
         );
         res.set("ProductName", if nightly { "LeanShell Nightly" } else { "LeanShell" });
         res.set("LegalCopyright", "Copyright (c) 2026 Sumir Seth. MIT License.");

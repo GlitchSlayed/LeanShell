@@ -296,7 +296,7 @@ impl Dock {
                 CreateWindowExW(
                     WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
                     class.lpszClassName,
-                    w!("Wisp Dock"),
+                    w!("LeanShell Dock"),
                     WS_POPUP | WS_CAPTION,
                     0,
                     0,
@@ -333,12 +333,12 @@ impl Dock {
             (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, w!("Notification area")),
             (
                 WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-                w!("Wisp Dock tooltip"),
+                w!("LeanShell Dock tooltip"),
             ),
             // The window list takes clicks, but not the focus.
             (
                 WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
-                w!("Wisp Dock windows"),
+                w!("LeanShell Dock windows"),
             ),
         ] {
             let window = unsafe {

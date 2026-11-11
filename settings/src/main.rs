@@ -40,9 +40,9 @@ fn main() {
             })
             .detach();
             let (title, width, height) = if welcome {
-                ("Welcome to Wisp", 560., 460.)
+                ("Welcome to LeanShell", 560., 460.)
             } else {
-                ("Wisp Settings", 820., 580.)
+                ("LeanShell Settings", 820., 580.)
             };
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -60,7 +60,7 @@ fn main() {
             gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| ui::Settings::new(welcome, page.as_deref(), window, cx))
             })
-            .expect("failed to open Wisp Settings");
+            .expect("failed to open LeanShell Settings");
             cx.activate(true);
         });
 }

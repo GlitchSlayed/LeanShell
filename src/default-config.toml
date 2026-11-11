@@ -1,4 +1,4 @@
-# Wisp config. Changes apply the next time the launcher opens.
+# LeanShell config. Changes apply the next time the launcher opens.
 
 # Shortcut to show or hide the launcher.
 # Examples: "Alt+Space", "Ctrl+Shift+Space", "Win+Alt+R", "Ctrl+F12"
@@ -21,7 +21,7 @@ position = "bottom"
 # Show recently launched apps when the search box is empty.
 show_recent = true
 
-# Web search URL. Wisp replaces {query} with the encoded search text.
+# Web search URL. LeanShell replaces {query} with the encoded search text.
 search_url = "https://www.google.com/search?q={query}"
 
 # Search file names in the Windows Search index. Start a query with ? to
@@ -32,7 +32,7 @@ file_search = true
 # whose names start with a dot, such as .git.
 file_search_exclude = ["node_modules", "AppData", "site-packages", "__pycache__", "venv", "target", "dist", "build", "Cache", "Code Cache", "GPUCache", "Service Worker", "IndexedDB", "Extensions"]
 
-# Hide the Windows taskbar while Wisp runs. The taskbar comes back when Wisp
+# Hide the Windows taskbar while LeanShell runs. The taskbar comes back when LeanShell
 # quits.
 hide_taskbar = true
 

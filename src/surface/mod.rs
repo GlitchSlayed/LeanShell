@@ -263,11 +263,11 @@ impl Library {
                     .any(|keyword| keyword.to_lowercase().starts_with(&query))
             })
             .map(|(index, spec)| {
-                // Says it is Wisp's own panel, since a Settings page often has the same title.
+                // Says it is LeanShell's own panel, since a Settings page often has the same title.
                 let subtitle = if spec.description.is_empty() {
-                    "Wisp panel".to_string()
+                    "LeanShell panel".to_string()
                 } else {
-                    format!("Wisp panel · {}", spec.description)
+                    format!("LeanShell panel · {}", spec.description)
                 };
                 ResultItem::new(Kind::Command, spec.title.clone(), subtitle, Action::Surface(index))
                     .glyph(GLYPH)

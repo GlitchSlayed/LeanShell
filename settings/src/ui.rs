@@ -306,11 +306,11 @@ impl Settings {
             (0xfaf9f6, 0x111111)
         };
         let title = if self.onboarding.is_some() {
-            "Welcome to Wisp"
+            "Welcome to LeanShell"
         } else if crate::channel::NIGHTLY {
-            "Wisp Nightly Settings"
+            "LeanShell Nightly Settings"
         } else {
-            "Wisp Settings"
+            "LeanShell Settings"
         };
         system::style_title_bar(title, dark, background, text);
     }
@@ -542,7 +542,7 @@ impl Settings {
             Updates::Available(release) => {
                 let page = release.page.clone();
                 (
-                    format!("Wisp {} is available. You have {current}.", release.version()).into(),
+                    format!("LeanShell {} is available. You have {current}.", release.version()).into(),
                     h_flex()
                         .gap_2()
                         .child(
@@ -561,11 +561,11 @@ impl Settings {
                 )
             }
             Updates::Installing => (
-                "Downloading and installing. Wisp restarts when it is done.".into(),
+                "Downloading and installing. LeanShell restarts when it is done.".into(),
                 busy("Updating…"),
             ),
             Updates::Installed(version) => (
-                format!("Wisp {version} is installed. Restart settings to use the new version.").into(),
+                format!("LeanShell {version} is installed. Restart settings to use the new version.").into(),
                 Button::new("restart-settings")
                     .primary()
                     .label("Restart")
@@ -615,7 +615,7 @@ impl Settings {
                 .text_color(p.muted)
                 .hover(|s| s.bg(p.surface).text_color(p.fg))
                 .child(div().size(px(6.)).rounded_full().bg(p.accent))
-                .child(format!("Wisp {} is available", release.version()))
+                .child(format!("LeanShell {} is available", release.version()))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.page = Page::About;
                     this.recording = false;
@@ -767,7 +767,7 @@ impl Settings {
                     .child(divider(p))
                     .child(row(
                         "Hide the taskbar",
-                        "Hide the Windows taskbar while Wisp runs. The taskbar comes back when Wisp quits.",
+                        "Hide the Windows taskbar while LeanShell runs. The taskbar comes back when LeanShell quits.",
                         Switch::new("hide-taskbar")
                             .checked(self.config.hide_taskbar)
                             .accessibility_label("Hide the taskbar")
@@ -794,7 +794,7 @@ impl Settings {
             .child(label("Startup", p))
             .child(group(p).child(row(
                 "Start with Windows",
-                "Open Wisp when you sign in.",
+                "Open LeanShell when you sign in.",
                 self.autostart_switch(cx),
                 p,
             )))
@@ -882,7 +882,7 @@ impl Settings {
                     ))
                     .child(divider(p))
                     .child(
-                        item("Web search URL", "Wisp replaces {query} with your search text.", p)
+                        item("Web search URL", "LeanShell replaces {query} with your search text.", p)
                             .child(Input::new(&self.url).aria_label("Web search URL"))
                             .children(self.url_error.as_ref().map(|e| error_text(e, p))),
                     ),
@@ -941,7 +941,7 @@ impl Settings {
                     .child(img(self.icon.clone()).size(px(40.)))
                     .child(
                         v_flex()
-                            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child("Wisp"))
+                            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child("LeanShell"))
                             .child(hint(format!("Version {}", env!("CARGO_PKG_VERSION")), p)),
                     ),
             )
@@ -959,10 +959,10 @@ impl Settings {
                     .child(divider(p))
                     .child(row(
                         "Source code",
-                        "github.com/SumirSeth/wisp",
+                        "github.com/GlitchSlayed/LeanShell",
                         Button::new("github")
                             .label("Open")
-                            .on_click(|_, _, cx| cx.open_url("https://github.com/SumirSeth/wisp")),
+                            .on_click(|_, _, cx| cx.open_url("https://github.com/GlitchSlayed/LeanShell")),
                         p,
                     )),
             )
@@ -1012,7 +1012,7 @@ impl Settings {
                             .px_2()
                             .pb_4()
                             .child(img(self.icon.clone()).size(px(22.)))
-                            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child("wisp")),
+                            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child("LeanShell")),
                     )
                     .children(
                         Page::ALL
@@ -1049,7 +1049,7 @@ impl Settings {
             group(p).child(item("Shortcut", "Shows or hides the launcher.", p).child(self.shortcut_control(p, cx)));
         let (title, body): (&str, Div) = match step {
             0 => (
-                "Welcome to Wisp",
+                "Welcome to LeanShell",
                 v_flex()
                     .gap_4()
                     .child(
@@ -1064,7 +1064,7 @@ impl Settings {
                     .child(match self.conflict_warning(p) {
                         Some(warning) => warning,
                         None => hint(
-                            "PowerToys Run does not use this shortcut. If another app takes it, Wisp shows a notification.",
+                            "PowerToys Run does not use this shortcut. If another app takes it, LeanShell shows a notification.",
                             p,
                         ),
                     })
@@ -1076,12 +1076,12 @@ impl Settings {
                     .gap_4()
                     .child(group(p).child(row(
                         "Start with Windows",
-                        "Open Wisp when you sign in.",
+                        "Open LeanShell when you sign in.",
                         self.autostart_switch(cx),
                         p,
                     )))
                     .child(hint(
-                        "To change settings later, right-click the Wisp icon in the notification area and select Settings. With the dock, the icon is behind the ⌄ button.",
+                        "To change settings later, right-click the LeanShell icon in the notification area and select Settings. With the dock, the icon is behind the ⌄ button.",
                         p,
                     )),
             ),
