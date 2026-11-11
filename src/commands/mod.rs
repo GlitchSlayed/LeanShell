@@ -581,7 +581,7 @@ fn power_items(query: &str) -> Vec<ResultItem> {
             })
             .collect();
     }
-    if query.chars().count() < 2 {
+    if query.chars().count() < 3 {
         return Vec::new();
     }
     Power::ALL
