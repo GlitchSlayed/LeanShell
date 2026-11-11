@@ -202,8 +202,8 @@ mod tests {
     #[test]
     fn autostart_targets_launcher_beside_settings() {
         assert_eq!(
-            launcher_path(Path::new(r"C:\Program Files\Wisp\wisp-settings.exe")).unwrap(),
-            PathBuf::from(r"C:\Program Files\Wisp\wisp.exe")
+            launcher_path(Path::new(r"C:\Program Files\LeanShell\leanshell-settings.exe")).unwrap(),
+            PathBuf::from(r"C:\Program Files\LeanShell\leanshell.exe")
         );
     }
 }

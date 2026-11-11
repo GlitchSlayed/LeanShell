@@ -12,8 +12,8 @@ pub enum Manager {
 impl Manager {
     pub fn instruction(self) -> &'static str {
         match self {
-            Self::Winget => "Installed with winget. Update with winget upgrade SumirSeth.Wisp.",
-            Self::Scoop => "Installed with Scoop. Update with scoop update wisp.",
+            Self::Winget => "Installed with winget. Update with winget upgrade GlitchSlayed.LeanShell.",
+            Self::Scoop => "Installed with Scoop. Update with scoop update leanshell.",
         }
     }
 }
@@ -70,7 +70,9 @@ pub fn autostart_path(exe: &Path, scoop: Option<&Path>) -> PathBuf {
     let Some(app) = version.parent() else {
         return exe.to_path_buf();
     };
-    if !app.file_name().is_some_and(|name| name.eq_ignore_ascii_case("wisp"))
+    if !app
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("leanshell") || name.eq_ignore_ascii_case("wisp"))
         || !app
             .parent()
             .and_then(Path::file_name)
