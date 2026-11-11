@@ -8,7 +8,7 @@ fn main() {
             "FileDescription",
             &format!("Wisp Settings{}", if nightly { " (Nightly)" } else { "" }),
         );
-        res.set("ProductName", if nightly { "Wisp Nightly" } else { "Wisp" });
+        res.set("ProductName", if nightly { "LeanShell Nightly" } else { "LeanShell" });
         res.set("LegalCopyright", "Copyright (c) 2026 Sumir Seth. MIT License.");
         if let Err(e) = res.compile() {
             println!("cargo:warning=failed to embed Windows resources: {e}");

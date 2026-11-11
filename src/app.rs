@@ -1425,7 +1425,7 @@ impl Launcher {
             // These need the launcher's foreground rights, so they run here.
             Command::FocusWindow(hwnd) => {
                 if let Err(error) = commands::open_windows::focus(hwnd) {
-                    tray::notify(self.hwnd, "Wisp", &error, true);
+                    tray::notify(self.hwnd, crate::channel::NAME, &error, true);
                 }
                 self.hide();
                 return;
@@ -1433,7 +1433,7 @@ impl Launcher {
             Command::Power(power) => {
                 self.hide();
                 if let Err(error) = commands::power::run(power) {
-                    tray::notify(self.hwnd, "Wisp", &error, true);
+                    tray::notify(self.hwnd, crate::channel::NAME, &error, true);
                 }
                 return;
             }
@@ -1564,7 +1564,7 @@ impl Launcher {
                         changed = true;
                     }
                 }
-                commands::Event::Failed(error) => tray::notify(self.hwnd, "Wisp", &error, true),
+                commands::Event::Failed(error) => tray::notify(self.hwnd, crate::channel::NAME, &error, true),
             }
         }
         if changed && self.visible {
