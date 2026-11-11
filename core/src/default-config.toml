@@ -64,3 +64,7 @@ panel_edge = "bottom"
 # Watchdog supervisor process to automatically restore the taskbar if LeanShell exits unexpectedly.
 watchdog = true
 
+# Intercept bare Windows key press to open the launcher instead of the stock Start menu.
+# Windows chords (Win+E, Win+R, Win+D, Win+L, etc.) still pass through unchanged.
+claim_win_key = true
+

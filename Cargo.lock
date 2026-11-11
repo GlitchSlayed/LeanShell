@@ -2501,7 +2501,7 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "leanshell"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "leanshell-core",
  "leanshell-platform-win",
@@ -2519,7 +2519,7 @@ dependencies = [
 
 [[package]]
 name = "leanshell-core"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "nucleo-matcher",
  "serde",
@@ -2528,7 +2528,7 @@ dependencies = [
 
 [[package]]
 name = "leanshell-platform-win"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "leanshell-core",
  "windows",
@@ -2537,14 +2537,14 @@ dependencies = [
 
 [[package]]
 name = "leanshell-render"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "leanshell-core",
 ]
 
 [[package]]
 name = "leanshell-settings"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "leanshell-core",
  "serde",
@@ -2562,7 +2562,7 @@ dependencies = [
 
 [[package]]
 name = "leanshell-ui-d2d"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "leanshell-core",
  "leanshell-render",

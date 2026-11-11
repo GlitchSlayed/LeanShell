@@ -2,6 +2,17 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.2 - 2026-11-10
+
+### Milestone 4: Launcher Replaces Start & Panel Polish
+
+- **Bare Windows Key Interception (Phase 4)**: Added a dedicated, non-blocking low-level keyboard hook (`WH_KEYBOARD_LL`) that claims the bare Windows key to open the LeanShell launcher instead of the stock Windows Start menu.
+- **Full Chord Transparency**: All Windows key chords (Win+E, Win+R, Win+D, Win+L, Win+X, Win+Tab, Win+Shift+S, Win+I, etc.) pass through completely unaltered.
+- **Direct Power Actions**: Typing power actions (`lock`, `sleep`, `restart`, `reboot`, `shutdown`, `power off`, `sign out`, `log off`, or `power`) instantly lists and executes Win32 power management operations with safe confirmation for destructive actions.
+- **Panel Edge & Geometry Fixes**: Complete multi-edge placement (Bottom, Top, Left, Right) with full-width monitor expansion and right-aligned system tray, volume, and clock.
+- **Panel Context Menu**: Right-clicking empty space on the panel or dock provides instant access to LeanShell Settings, taskbar restoration, and Windows taskbar settings.
+- **Configurable Win Key Claim**: `claim_win_key` setting in `config.toml` and Settings app to toggle Win key interception.
+
 ## 0.0.1 - 2026-11-10
 
 ### LeanShell Initial Early Experimental Release

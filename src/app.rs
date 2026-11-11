@@ -281,6 +281,7 @@ pub fn run() -> Result<()> {
             taskbar_failures: 0,
             dock_space: None,
             dock: None,
+            win_key_hook: None,
             morph: None,
             morphed: false,
             outline: None,
@@ -457,6 +458,7 @@ struct Launcher {
     /// Room kept for a dock that stays visible.
     dock_space: Option<DockSpace>,
     dock: Option<Dock>,
+    win_key_hook: Option<leanshell_platform_win::hook::WinKeyHook>,
     morph: Option<Morph>,
     morphed: bool,
     outline: Option<RECT>,
@@ -500,6 +502,7 @@ struct Scope {
 impl Launcher {
     fn start(&mut self) {
         self.sync_shell();
+        self.sync_win_key_hook();
         self.apply_theme();
         self.set_collapsed_style(true);
         if self.unified() {
@@ -512,6 +515,19 @@ impl Launcher {
         }
         self.indexer.rescan();
         self.last_scan = Instant::now();
+    }
+
+    fn sync_win_key_hook(&mut self) {
+        if self.config.claim_win_key && !crate::util::perf::hook_on("WISP_CAPTURE") {
+            if self.win_key_hook.is_none() {
+                match leanshell_platform_win::hook::WinKeyHook::new(self.hwnd) {
+                    Ok(hook) => self.win_key_hook = Some(hook),
+                    Err(e) => eprintln!("Could not install Win key hook: {e}"),
+                }
+            }
+        } else {
+            self.win_key_hook = None;
+        }
     }
 
     fn tooltip(&self) -> String {
@@ -590,6 +606,7 @@ impl Launcher {
         self.config = config;
         self.taskbar_failures = 0;
         self.sync_shell();
+        self.sync_win_key_hook();
         self.apply_theme();
         self.register_hotkey(true);
     }

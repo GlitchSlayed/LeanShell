@@ -20,6 +20,7 @@ export component SettingsWindow inherits Window {
     in_out property <string> panel_edge: "bottom"; // "bottom", "top", "left", "right"
     in_out property <string> shell_mode: "companion"; // "companion", "exclusive"
     in_out property <bool> watchdog: true;
+    in_out property <bool> claim_win_key: true;
     in_out property <bool> hide_taskbar: true;
     in_out property <bool> dock_enabled: true;
     in_out property <bool> dock_autohide: true;
@@ -53,6 +54,7 @@ export component SettingsWindow inherits Window {
     callback panel_edge_changed(string);
     callback shell_mode_changed(string);
     callback watchdog_changed(bool);
+    callback claim_win_key_changed(bool);
     callback hide_taskbar_changed(bool);
     callback dock_enabled_changed(bool);
     callback dock_autohide_changed(bool);
@@ -392,6 +394,20 @@ export component SettingsWindow inherits Window {
                                 Switch {
                                     checked: watchdog;
                                     toggled => { root.watchdog_changed(self.checked); }
+                                }
+                            }
+
+                            // Claim Windows Key
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Claim Windows Key"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Open LeanShell launcher on bare Win key tap (chords pass through)"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Switch {
+                                    checked: claim_win_key;
+                                    toggled => { root.claim_win_key_changed(self.checked); }
                                 }
                             }
                         }

@@ -14,7 +14,7 @@ param()
 
 $ErrorActionPreference = "Continue"
 
-Write-Host "==> [1/4] Terminating LeanShell / Wisp processes..." -ForegroundColor Cyan
+Write-Host "==> [1/4] Terminating LeanShell / Wisp processes (releases WH_KEYBOARD_LL hooks)..." -ForegroundColor Cyan
 Get-Process -Name "leanshell", "leanshell-nightly", "wisp", "wisp-nightly" -ErrorAction SilentlyContinue | ForEach-Object {
     Write-Host "    Killing process $($_.Name) (PID: $($_.Id))" -ForegroundColor Yellow
     Stop-Process -Id $_.Id -Force

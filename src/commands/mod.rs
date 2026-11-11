@@ -566,7 +566,22 @@ fn media_items(words: &[&str], state: Option<&Option<media::State>>) -> Vec<Resu
 }
 
 fn power_items(query: &str) -> Vec<ResultItem> {
-    if query.chars().count() < 3 {
+    if query == "power" || query == "power menu" {
+        return Power::ALL
+            .into_iter()
+            .map(|p| {
+                let subtitle = if p.needs_confirmation() {
+                    format!("{} · Press Enter twice", p.description())
+                } else {
+                    p.description().to_string()
+                };
+                row(p.title(), subtitle, Action::Command(Command::Power(p)))
+                    .glyph(p.glyph())
+                    .verb(p.title())
+            })
+            .collect();
+    }
+    if query.chars().count() < 2 {
         return Vec::new();
     }
     Power::ALL

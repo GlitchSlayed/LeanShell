@@ -51,6 +51,7 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
     window.set_panel_edge(config.panel_edge.into());
     window.set_shell_mode(config.shell_mode.into());
     window.set_watchdog(config.watchdog);
+    window.set_claim_win_key(config.claim_win_key);
     window.set_hide_taskbar(config.hide_taskbar);
     window.set_dock_enabled(config.dock);
     window.set_dock_autohide(config.dock_autohide);
@@ -133,6 +134,21 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
         let weak = window.as_weak();
         window.on_watchdog_changed(move |val| {
             apply_setting(&store, &weak, "watchdog", val.into(), |w, v| w.set_watchdog(v), val);
+        });
+    }
+
+    {
+        let store = Arc::clone(&store);
+        let weak = window.as_weak();
+        window.on_claim_win_key_changed(move |val| {
+            apply_setting(
+                &store,
+                &weak,
+                "claim_win_key",
+                val.into(),
+                |w, v| w.set_claim_win_key(v),
+                val,
+            );
         });
     }
 

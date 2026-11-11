@@ -9,3 +9,4 @@ shell_mode = "companion"
 display_mode = "dock"
 panel_edge = "bottom"
 watchdog = true
+claim_win_key = true

@@ -26,6 +26,7 @@ pub struct Config {
     pub panel_edge: String,
     pub shell_mode: String,
     pub watchdog: bool,
+    pub claim_win_key: bool,
 }
 
 impl Default for Config {
@@ -65,6 +66,7 @@ impl Config {
         let shell_mode = string("shell_mode").unwrap_or_else(|_| "companion".into());
         choice(&shell_mode, &["companion", "exclusive"], "shell_mode")?;
         let watchdog = boolean("watchdog").unwrap_or(true);
+        let claim_win_key = boolean("claim_win_key").unwrap_or(true);
         let dock_icon_size = get("dock_icon_size")
             .as_integer()
             .filter(|value| *value >= 0)
@@ -105,6 +107,7 @@ impl Config {
             panel_edge,
             shell_mode,
             watchdog,
+            claim_win_key,
         })
     }
 }
@@ -246,7 +249,10 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         "watchdog" if value.as_bool().is_none() => {
             return Err("watchdog must be true or false.".into());
         }
-        "window_list" | "display_mode" | "panel_edge" | "shell_mode" | "watchdog" => {}
+        "claim_win_key" if value.as_bool().is_none() => {
+            return Err("claim_win_key must be true or false.".into());
+        }
+        "window_list" | "display_mode" | "panel_edge" | "shell_mode" | "watchdog" | "claim_win_key" => {}
         _ => return Err(format!("Unknown setting: {key}")),
     }
     Ok(())
@@ -278,6 +284,7 @@ mod tests {
         assert_eq!(config.panel_edge, "bottom");
         assert_eq!(config.shell_mode, "companion");
         assert!(config.watchdog);
+        assert!(config.claim_win_key);
         assert_eq!(Config::from_document(&DEFAULT_CONFIG.parse().unwrap()).unwrap(), config);
     }
 

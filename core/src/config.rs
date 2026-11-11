@@ -102,6 +102,8 @@ pub struct Config {
     pub panel_thickness: Option<u32>,
     #[serde(default = "default_true")]
     pub watchdog: bool,
+    #[serde(default = "default_true")]
+    pub claim_win_key: bool,
 }
 
 fn default_true() -> bool {
@@ -208,5 +210,13 @@ mod tests {
         let config2 = Config::parse("display_mode = \"center\"").unwrap();
         assert_eq!(config2.display_mode, DisplayMode::Center);
         assert_eq!(config2.panel_edge, PanelEdge::Bottom);
+    }
+
+    #[test]
+    fn claim_win_key_deserializes() {
+        let config = Config::parse("claim_win_key = false").unwrap();
+        assert!(!config.claim_win_key);
+        let default = Config::default();
+        assert!(default.claim_win_key);
     }
 }

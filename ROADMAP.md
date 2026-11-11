@@ -71,9 +71,9 @@ Restructure the workspace so UI toolkits are swappable:
 
 - Low-level keyboard hook (`WH_KEYBOARD_LL`) to claim the bare Win key. Chords (Win+E, Win+R, Win+D, Win+L, etc.) must pass through unchanged.
 - Hook must be fast and never block; keep it on its own thread with a hard time budget.
-- Start-style view: pinned apps, all apps, recents, power menu (lock, sleep, restart, shut down, sign out), settings search.
+- Fast launcher workflow: direct typed power commands (`lock`, `sleep`, `restart`, `shutdown`, `power`, `sign out`), settings search, files, calculator.
 - Keep the existing grammar (`?files`, calc, `w window`, settings commands, media, etc.).
-- Research item: suppress or neutralize the built-in Start experience (StartMenuExperienceHost) without breaking other system features.
+- Neutralize the built-in Start experience (StartMenuExperienceHost) on bare Win release via synthetic key intercept.
 
 **Exit:** pressing Win opens the launcher; the stock Start never appears; chords still work.
 

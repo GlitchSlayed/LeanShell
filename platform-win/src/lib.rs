@@ -5,8 +5,10 @@
 
 pub mod appbar;
 pub mod backdrop;
+pub mod hook;
 pub mod hotkey;
 
 pub use appbar::AppBar;
 pub use backdrop::apply_backdrop;
+pub use hook::{WinKeyHook, WinKeyTracker};
 pub use hotkey::HotkeyManager;

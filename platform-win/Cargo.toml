@@ -1,6 +1,6 @@
 [package]
 name = "leanshell-platform-win"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 description = "Native Win32 platform integration, AppBar, hooks, and tray host for LeanShell"
 license = "MIT"

@@ -1,6 +1,6 @@
 [package]
 name = "leanshell"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 description = "A Windows 11 shell, dock, and launcher replacement with ~0% idle resource use"
 license = "MIT"
