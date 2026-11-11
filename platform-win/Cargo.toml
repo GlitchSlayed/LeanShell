@@ -1,6 +1,6 @@
 [package]
 name = "leanshell-platform-win"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 description = "Native Win32 platform integration, AppBar, hooks, and tray host for LeanShell"
 license = "MIT"
@@ -21,6 +21,7 @@ features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_Threading",
+    "Win32_UI_Accessibility",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",

@@ -2,6 +2,14 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.6 - 2026-11-10
+
+### Track 1: Event-Driven Window & Task Tracking (from ManagedShell)
+
+- **Zero-Latency Active Task Highlight**: Decoupled `EVENT_SYSTEM_FOREGROUND` from the debounced 100ms `EnumWindows` scan. Window focus changes now trigger instantaneous (`0ms`) active tile updates via `WM_FOREGROUND_CHANGED` and `InvalidateRect` without allocating or walking the window tree.
+- **ManagedShell Window Classification Rules**: Ported `WS_EX_APPWINDOW` recognition and fallback window title resolution into `open_windows::collect`. Windows explicitly tagged as application windows now appear on the taskbar even with parent owners, and applications with blank startup titles display their process names reliably.
+- **Native Window Hook Subsystem (`platform-win`)**: Added native `WindowHook` RAII wrapper in `leanshell-platform-win` for system-wide event hooks (`SetWinEventHook` / `UnhookWinEvent`) covering foreground switches, minimize/restore, and window creation/destruction.
+
 ## 0.0.5 - 2026-11-10
 
 ### Stabilization, Keyboard Hook Fixes & Centered Panel Alignment

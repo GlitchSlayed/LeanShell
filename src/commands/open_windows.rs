@@ -41,11 +41,15 @@ pub fn list() -> Vec<Window> {
 unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
     unsafe {
         let windows = &mut *(lparam.0 as *mut Vec<Window>);
-        if !IsWindowVisible(hwnd).as_bool() || GetWindow(hwnd, GW_OWNER).is_ok_and(|owner| !owner.is_invalid()) {
+        if !IsWindowVisible(hwnd).as_bool() {
             return true.into();
         }
         let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
         if style & WS_EX_TOOLWINDOW.0 != 0 {
+            return true.into();
+        }
+        let is_app_window = style & WS_EX_APPWINDOW.0 != 0;
+        if !is_app_window && GetWindow(hwnd, GW_OWNER).is_ok_and(|owner| !owner.is_invalid()) {
             return true.into();
         }
         let mut cloaked = 0u32;
@@ -53,20 +57,26 @@ unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
         if cloaked != 0 {
             return true.into();
         }
-        let mut title = [0u16; 512];
-        let len = GetWindowTextW(hwnd, &mut title);
-        if len <= 0 {
-            return true.into();
-        }
         let mut pid = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         if pid == std::process::id() {
             return true.into();
         }
+        let mut title_buf = [0u16; 512];
+        let len = GetWindowTextW(hwnd, &mut title_buf);
+        let exe = process_path(pid);
+        let title = if len > 0 {
+            String::from_utf16_lossy(&title_buf[..len as usize])
+        } else if is_app_window && !exe.is_empty() {
+            program_name(&exe).to_string()
+        } else {
+            return true.into();
+        };
+
         windows.push(Window {
             hwnd: hwnd.0 as isize,
-            title: String::from_utf16_lossy(&title[..len as usize]),
-            exe: process_path(pid),
+            title,
+            exe,
         });
         true.into()
     }

@@ -57,6 +57,7 @@ const WM_TRAY_CHANGED: u32 = WM_APP + 22;
 /// dock lacks.
 pub const WM_DOCK_SHOW_TASKBAR: u32 = WM_APP + 23;
 const WM_CLOSE_FLYOUT: u32 = WM_APP + 24;
+const WM_FOREGROUND_CHANGED: u32 = WM_APP + 25;
 /// Shows a notification icon's tooltip after a short hover.
 const TIP_TIMER: usize = 104;
 const TIP_MS: u32 = 450;
@@ -416,7 +417,7 @@ impl Dock {
 
     pub fn owns_message(msg: u32, wp: WPARAM) -> bool {
         msg == WM_TIMER && (REFRESH_TIMER..=WINDOWS_HIDE_TIMER).contains(&wp.0)
-            || matches!(msg, WM_REFRESH | WM_TRAY_CHANGED | WM_INPUT)
+            || matches!(msg, WM_REFRESH | WM_FOREGROUND_CHANGED | WM_TRAY_CHANGED | WM_INPUT)
     }
 
     pub fn mostly_visible(&self) -> bool {
@@ -2293,26 +2294,33 @@ unsafe extern "system" fn window_event(
     _: u32,
     _: u32,
 ) {
-    if event != EVENT_SYSTEM_FOREGROUND {
-        if !matches!(
-            event,
-            EVENT_OBJECT_CREATE
-                | EVENT_OBJECT_DESTROY
-                | EVENT_OBJECT_SHOW
-                | EVENT_OBJECT_HIDE
-                | EVENT_OBJECT_NAMECHANGE
-                | EVENT_OBJECT_LOCATIONCHANGE
-                | EVENT_OBJECT_CLOAKED
-                | EVENT_OBJECT_UNCLOAKED
-        ) || object != OBJID_WINDOW.0
-            || child != 0
-            || hwnd.is_invalid()
-        {
-            return;
-        }
-        if event != EVENT_OBJECT_DESTROY && unsafe { GetAncestor(hwnd, GA_ROOT) } != hwnd {
-            return;
-        }
+    if event == EVENT_SYSTEM_FOREGROUND {
+        EVENT_TARGET.with(|target| unsafe {
+            let hwnd = target.get();
+            if !hwnd.is_invalid() {
+                let _ = PostMessageW(Some(hwnd), WM_FOREGROUND_CHANGED, WPARAM(0), LPARAM(0));
+            }
+        });
+        return;
+    }
+    if !matches!(
+        event,
+        EVENT_OBJECT_CREATE
+            | EVENT_OBJECT_DESTROY
+            | EVENT_OBJECT_SHOW
+            | EVENT_OBJECT_HIDE
+            | EVENT_OBJECT_NAMECHANGE
+            | EVENT_OBJECT_LOCATIONCHANGE
+            | EVENT_OBJECT_CLOAKED
+            | EVENT_OBJECT_UNCLOAKED
+    ) || object != OBJID_WINDOW.0
+        || child != 0
+        || hwnd.is_invalid()
+    {
+        return;
+    }
+    if event != EVENT_OBJECT_DESTROY && unsafe { GetAncestor(hwnd, GA_ROOT) } != hwnd {
+        return;
     }
     EVENT_TARGET.with(|target| unsafe {
         let hwnd = target.get();
@@ -2357,6 +2365,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     if !s.scheduled {
                         s.scheduled = SetTimer(Some(hwnd), REFRESH_TIMER, 100, None) != 0;
                     }
+                    return LRESULT(0);
+                }
+                WM_FOREGROUND_CHANGED => {
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                     return LRESULT(0);
                 }
                 WM_TIMER if wp.0 == POLL_TIMER => {
