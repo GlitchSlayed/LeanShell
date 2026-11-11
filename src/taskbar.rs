@@ -879,6 +879,23 @@ pub fn restore_shell_cli() -> Result<()> {
 /// Dispatches CLI actions such as `--restore-shell` and `--taskbar-watchdog`.
 pub fn dispatch_cli() -> bool {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--register-shell") {
+        match std::env::current_exe() {
+            Ok(exe) => match leanshell_platform_win::register_exclusive_shell(&exe) {
+                Ok(()) => println!("[SUCCESS] LeanShell registered as primary user shell in HKCU Winlogon."),
+                Err(e) => eprintln!("Failed to register shell: {e}"),
+            },
+            Err(e) => eprintln!("Failed to determine executable path: {e}"),
+        }
+        return true;
+    }
+    if args.iter().any(|a| a == "--unregister-shell") {
+        match leanshell_platform_win::unregister_exclusive_shell() {
+            Ok(()) => println!("[SUCCESS] Reset HKCU Winlogon Shell override back to Windows Explorer."),
+            Err(e) => eprintln!("Failed to unregister shell: {e}"),
+        }
+        return true;
+    }
     if args.iter().any(|a| a == "--restore-shell") {
         if let Err(e) = restore_shell_cli() {
             eprintln!("Failed to restore shell: {e}");

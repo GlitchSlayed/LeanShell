@@ -7,6 +7,8 @@ mod calc;
 mod commands;
 #[path = "../src/config.rs"]
 mod config;
+#[path = "../src/desktop.rs"]
+mod desktop;
 #[path = "../src/dock.rs"]
 mod dock;
 #[path = "../src/drag.rs"]
@@ -31,6 +33,8 @@ mod morph;
 mod render;
 #[path = "../src/search.rs"]
 mod search;
+#[path = "../src/startup.rs"]
+mod startup;
 #[path = "../src/surface/mod.rs"]
 mod surface;
 #[path = "../src/system.rs"]

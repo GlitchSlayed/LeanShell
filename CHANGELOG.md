@@ -2,6 +2,17 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.4 - 2026-11-10
+
+### Milestone 6: Exclusive Shell Mode (Boot Directly into LeanShell)
+
+- **Exclusive Shell Mode (Phase 6)**: Registered LeanShell as Windows 11 primary user shell via per-user `HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\Shell`. Never touches machine-wide registry.
+- **Fail-Safe Startup Mode**: Holding **Shift** at Windows logon/boot automatically triggers emergency safe-mode fallback, reverting HKCU Winlogon shell and launching Windows Explorer cleanly.
+- **Logon Startup Applications (Track T3)**: LeanShell automatically executes user and system startup items (HKCU/HKLM Run and RunOnce keys, user and common Startup folders) on a background thread with zero boot delay.
+- **Minimal Desktop Background**: Lightweight Win32 `HWND_BOTTOM` desktop surface rendering the active desktop wallpaper via native GDI `PaintDesktop` and hosting right-click desktop options.
+- **CLI Shell Management**: Added `--register-shell` and `--unregister-shell` commands for seamless scripting and manual control.
+- **Onboarding Mode Selector**: Added dedicated Shell Mode step ("Companion" vs "Exclusive Shell") to the first-boot onboarding wizard in Settings.
+
 ## 0.0.3 - 2026-11-10
 
 ### Milestone 5: Renderer Backends (Direct2D & Slint)

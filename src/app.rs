@@ -139,6 +139,14 @@ pub fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().any(|a| a == name);
 
+    // Emergency Safe Mode: If Shift is held down at logon/boot, abort shell takeover
+    if leanshell_platform_win::is_safe_mode_requested() {
+        eprintln!("[SAFE MODE] Shift key held at startup. Restoring Explorer and exiting.");
+        let _ = leanshell_platform_win::unregister_exclusive_shell();
+        let _ = crate::launch::open("explorer.exe");
+        return Ok(());
+    }
+
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ole = drag::Ole::new()?;
@@ -282,6 +290,8 @@ pub fn run() -> Result<()> {
             dock_space: None,
             dock: None,
             win_key_hook: None,
+            desktop: None,
+            startup_launched: false,
             morph: None,
             morphed: false,
             outline: None,
@@ -459,6 +469,8 @@ struct Launcher {
     dock_space: Option<DockSpace>,
     dock: Option<Dock>,
     win_key_hook: Option<leanshell_platform_win::hook::WinKeyHook>,
+    desktop: Option<crate::desktop::DesktopWindow>,
+    startup_launched: bool,
     morph: Option<Morph>,
     morphed: bool,
     outline: Option<RECT>,
@@ -503,6 +515,7 @@ impl Launcher {
     fn start(&mut self) {
         self.sync_shell();
         self.sync_win_key_hook();
+        self.sync_exclusive_shell();
         self.apply_theme();
         self.set_collapsed_style(true);
         if self.unified() {
@@ -527,6 +540,26 @@ impl Launcher {
             }
         } else {
             self.win_key_hook = None;
+        }
+    }
+
+    fn sync_exclusive_shell(&mut self) {
+        let is_exclusive = self.config.shell_mode == leanshell_core::config::ShellMode::Exclusive
+            || leanshell_platform_win::is_exclusive_shell_registered();
+
+        if is_exclusive {
+            if self.desktop.is_none() {
+                match crate::desktop::DesktopWindow::new() {
+                    Ok(desktop) => self.desktop = Some(desktop),
+                    Err(e) => eprintln!("Could not create desktop window: {e}"),
+                }
+            }
+            if !self.startup_launched {
+                self.startup_launched = true;
+                crate::startup::launch_logon_startup_apps();
+            }
+        } else {
+            self.desktop = None;
         }
     }
 
@@ -607,6 +640,7 @@ impl Launcher {
         self.taskbar_failures = 0;
         self.sync_shell();
         self.sync_win_key_hook();
+        self.sync_exclusive_shell();
         self.apply_theme();
         self.register_hotkey(true);
     }

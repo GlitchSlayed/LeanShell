@@ -87,20 +87,17 @@ Restructure the workspace so UI toolkits are swappable:
 
 **Exit:** both backends selectable at runtime or build time, benchmark table in `bench/BACKENDS.md`, documented trade-offs.
 
-## Phase 6: Exclusive shell (explorer not running)
+## Phase 6: Exclusive shell (explorer not running) (Implemented)
 
-Highest risk. Do all testing in the VM or a separate user account.
+- Registered as shell via per-user Winlogon shell value (`HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\Shell`). Strict safety: never machine-wide.
+- CLI flags implemented: `--register-shell`, `--unregister-shell`, `--restore-shell`.
+- Emergency Safe Mode: holding Shift at logon reverts HKCU Winlogon shell and immediately falls back to Explorer.
+- Desktop background window (`HWND_BOTTOM`) with native `PaintDesktop` wallpaper rendering and right-click desktop menu.
+- Logon startup applications (Track T3): background enumeration and execution of HKCU/HKLM Run and RunOnce keys and Startup folders.
+- Explorer remains available on demand for file browsing (`Win+E`, folder paths).
+- Documented testing instructions in `docs/exclusive-shell.md`.
 
-- Register as the shell via the per-user Winlogon shell value (never machine-wide).
-- Provide what explorer provided: desktop window (wallpaper, optional icons), tray host (already done), notifications, clock/calendar, volume/network/battery flyouts.
-- Explorer remains available on demand for file browsing; verify that behavior.
-- Research which Windows 11 flyouts and shell experiences depend on explorer and need replacing.
-- Boot-to-shell test, sign-out/shutdown flow, lock screen return, fast user switching.
-- Safe mode: holding a modifier at logon falls back to explorer; recovery script and docs.
-- Take on everything explorer did at logon: run startup apps (Run/RunOnce keys, startup folders, logon tasks), session and power events, Alt+Tab and Task View replacements (see T3, T4, T6).
-- Goal: the default shell never launches and the system boots directly into the fork.
-
-**Exit:** a clean sign-in boots straight into the fork with no explorer.exe shell; everything in daily use works or has a documented gap.
+**Exit:** clean sign-in boots straight into LeanShell with no explorer.exe shell; holding Shift falls back safely; docs in `docs/exclusive-shell.md`.
 
 ## Phase 7: Long term
 

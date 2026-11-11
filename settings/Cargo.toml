@@ -1,6 +1,6 @@
 [package]
 name = "leanshell-settings"
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 description = "Settings and onboarding for LeanShell"
 license = "MIT"
@@ -12,6 +12,7 @@ nightly = []
 
 [dependencies]
 leanshell-core = { path = "../core" }
+leanshell-platform-win = { path = "../platform-win" }
 slint = "1.18"
 toml_edit = "0.23"
 serde = { version = "1", features = ["derive"] }

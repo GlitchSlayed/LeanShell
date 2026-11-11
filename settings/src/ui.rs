@@ -120,6 +120,14 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
         let store = Arc::clone(&store);
         let weak = window.as_weak();
         window.on_shell_mode_changed(move |val| {
+            if val == "exclusive" {
+                if let Ok(exe) = std::env::current_exe() {
+                    let main_exe = exe.with_file_name("leanshell.exe");
+                    let _ = leanshell_platform_win::register_exclusive_shell(&main_exe);
+                }
+            } else if val == "companion" {
+                let _ = leanshell_platform_win::unregister_exclusive_shell();
+            }
             apply_setting(
                 &store,
                 &weak,

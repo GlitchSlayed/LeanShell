@@ -88,13 +88,13 @@ export component SettingsWindow inherits Window {
         VerticalLayout {
             spacing: 12px;
             Text {
-                text: onboarding_step == 0 ? "Welcome to LeanShell" : (onboarding_step == 1 ? "Configure Shortcut" : "Start with Windows");
+                text: onboarding_step == 0 ? "Welcome to LeanShell" : (onboarding_step == 1 ? "Configure Shortcut" : (onboarding_step == 2 ? "Select Shell Mode" : "Start with Windows"));
                 font_size: 24px;
                 font_weight: 600;
                 color: #ffffff;
             }
             Text {
-                text: onboarding_step == 0 ? "LeanShell replaces your Windows taskbar with a high-performance dock, panel, and search launcher that idles at ~0% CPU and low memory." : (onboarding_step == 1 ? "Choose the shortcut that summons the search launcher from anywhere." : "Launch LeanShell automatically when you sign in to Windows.");
+                text: onboarding_step == 0 ? "LeanShell replaces your Windows taskbar with a high-performance dock, panel, and search launcher that idles at ~0% CPU and low memory." : (onboarding_step == 1 ? "Choose the shortcut that summons the search launcher from anywhere." : (onboarding_step == 2 ? "Choose whether LeanShell runs alongside Windows or completely replaces the Explorer shell for maximum speed." : "Launch LeanShell automatically when you sign in to Windows."));
                 font_size: 14px;
                 color: #cccccc;
                 wrap: word-wrap;
@@ -118,12 +118,12 @@ export component SettingsWindow inherits Window {
                         color: #ffffff;
                     }
                     Text {
-                        text: "• Press Alt+Space to open the instant launcher";
+                        text: "• Press Alt+Space or bare Windows key to open the instant launcher";
                         font_size: 14px;
                         color: #ffffff;
                     }
                     Text {
-                        text: "• Type app or file names, calculations, or web searches";
+                        text: "• Type app or file names, calculations, power actions, or web searches";
                         font_size: 14px;
                         color: #ffffff;
                     }
@@ -165,6 +165,57 @@ export component SettingsWindow inherits Window {
                 border_width: 1px;
                 border_color: #3d3d3d;
 
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 14px;
+
+                    HorizontalLayout {
+                        alignment: space_between;
+                        VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: "Operating Shell Mode:";
+                                font_size: 14px;
+                                font_weight: 600;
+                                color: #ffffff;
+                            }
+                            Text {
+                                text: shell_mode == "exclusive" ? "Exclusive Shell: Direct boot, 0% Explorer idle overhead" : "Companion: Runs alongside Windows Explorer";
+                                font_size: 12px;
+                                color: #aaaaaa;
+                            }
+                        }
+                        ComboBox {
+                            width: 180px;
+                            model: ["companion", "exclusive"];
+                            current_value: shell_mode;
+                            selected(val) => { root.shell_mode_changed(val); }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: #383838;
+                    }
+
+                    Text {
+                        text: shell_mode == "exclusive" ? "• Boots directly into LeanShell with wallpaper desktop.\n• Emergency Safe Mode: Hold Shift at logon to fall back to Explorer.\n• Run 'leanshell --restore-shell' anytime to reset." : "• Windows Explorer continues running in background.\n• Taskbar is automatically hidden with active watchdog recovery.";
+                        font_size: 12px;
+                        color: #cccccc;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+        if onboarding_step == 3: VerticalLayout {
+            spacing: 16px;
+            Rectangle {
+                background: #2b2b2b;
+                border_radius: 8px;
+                border_width: 1px;
+                border_color: #3d3d3d;
+
                 HorizontalLayout {
                     padding: 16px;
                     alignment: space_between;
@@ -185,12 +236,12 @@ export component SettingsWindow inherits Window {
         HorizontalLayout {
             alignment: end;
             spacing: 12px;
-            if onboarding_step < 2: Button {
+            if onboarding_step < 3: Button {
                 text: "Next";
                 primary: true;
                 clicked => { root.next_onboarding_clicked(); }
             }
-            if onboarding_step >= 2: Button {
+            if onboarding_step >= 3: Button {
                 text: "Get Started";
                 primary: true;
                 clicked => { root.finish_onboarding_clicked(); }
