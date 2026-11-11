@@ -216,15 +216,33 @@ fn refresh_icons() {
 }
 
 impl Host {
-    /// Pins Explorer's tray and puts our window ahead of it.
+    /// Pins Explorer's tray if running, or operates standalone as primary Shell_TrayWnd host.
     fn attach(&mut self) -> Result<(), String> {
-        let (tray, pid) = explorer_tray().ok_or("Explorer's taskbar was not found")?;
+        let explorer = explorer_tray();
+        let (tray, pid) = match explorer {
+            Some((t, p)) => (Some(t), Some(p)),
+            None => (None, None),
+        };
         unsafe {
-            let process = OpenProcess(PROCESS_SYNCHRONIZE, false, pid).map_err(|e| e.message())?;
-            self.explorer = Some(Explorer { tray, pid, process });
-            EXPLORER.with(|e| e.set(tray.0 as usize));
+            let process = if let Some(pid) = pid {
+                OpenProcess(PROCESS_SYNCHRONIZE, false, pid).ok()
+            } else {
+                None
+            };
+            self.explorer = explorer.map(|(t, p)| Explorer {
+                tray: t,
+                pid: p,
+                process: process.unwrap_or(HANDLE::default()),
+            });
+            if let Some(t) = tray {
+                EXPLORER.with(|e| e.set(t.0 as usize));
+            } else {
+                EXPLORER.with(|e| e.set(0));
+            }
             let mut rect = RECT::default();
-            let _ = GetWindowRect(tray, &mut rect);
+            if let Some(tray) = tray {
+                let _ = GetWindowRect(tray, &mut rect);
+            }
             let proxy = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
                 TRAY_CLASS,
@@ -232,8 +250,8 @@ impl Host {
                 WS_POPUP,
                 rect.left,
                 rect.top,
-                rect.right - rect.left,
-                rect.bottom - rect.top,
+                (rect.right - rect.left).max(1),
+                (rect.bottom - rect.top).max(1),
                 None,
                 None,
                 Some(self.instance),
@@ -255,6 +273,11 @@ impl Host {
             }
         }
         self.waiting = 0;
+        // In standalone mode (no Explorer running), broadcast TaskbarCreated
+        // so all background applications register their tray icons immediately.
+        if self.explorer.is_none() {
+            refresh_icons();
+        }
         Ok(())
     }
 
@@ -662,7 +685,8 @@ unsafe extern "system" fn control_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
 fn forward_copy(wp: WPARAM, tag: usize, bytes: &[u8]) -> LRESULT {
     let tray = HWND(EXPLORER.with(Cell::get) as _);
     if tray.is_invalid() {
-        return LRESULT(0);
+        // Standalone mode: we are the primary Shell_TrayWnd, succeed the call directly.
+        return LRESULT(1);
     }
     let data = COPYDATASTRUCT {
         dwData: tag,

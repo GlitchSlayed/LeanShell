@@ -681,8 +681,10 @@ impl Launcher {
             dock.set_apps(&self.apps, &self.icons);
             dock.set_window_list_mode(self.config.window_list);
             dock.set_app_icon_size(self.config.dock_icon_size as u32);
-            // Notification icons need a home while the taskbar is hidden.
-            dock.set_tray(self.taskbar.as_ref().is_some_and(TaskbarHider::is_active));
+            // Notification icons need a home while the taskbar is hidden or in exclusive shell mode.
+            let tray_enabled = self.config.shell_mode == leanshell_core::config::ShellMode::Exclusive
+                || self.taskbar.as_ref().is_some_and(TaskbarHider::is_active);
+            dock.set_tray(tray_enabled);
             let autohide = if self.config.display_mode == DisplayMode::Panel {
                 false
             } else {

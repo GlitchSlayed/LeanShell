@@ -2,6 +2,21 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.7 - 2026-11-10
+
+### Track 2: Standalone System Tray Host & Track 3: Enhanced Shell Context Menus
+
+- **Standalone System Tray Host (Track 2, from ManagedShell.SysTray)**:
+  - Enabled LeanShell to operate as the primary, self-sufficient `Shell_TrayWnd` host in Exclusive Shell Mode when Windows Explorer is not running.
+  - Succeeded `Shell_NotifyIcon` packets directly (`LRESULT(1)`) without requiring an active Explorer taskbar to forward to.
+  - Broadcasts `TaskbarCreated` system message upon standalone tray host initialization so all running background apps (Discord, Steam, Telegram, OneDrive, sound, battery, etc.) immediately register their notification icons with LeanShell.
+- **Enhanced Taskbar Shell Context Menus (Track 3, from Open-Shell-Menu)**:
+  - Added multi-window switcher menu items: right-clicking an app with multiple windows now enumerates each active window by title. Clicking any window switches to and restores it immediately.
+  - Added "New window" action to launch additional instances of the selected application.
+  - Added "Run as administrator" action utilizing elevated execution via the `runas` verb.
+  - Added "Open file location" action to locate the executable directly on disk.
+  - Upgraded close actions to intelligently distinguish between "Close window" and "Close all windows".
+
 ## 0.0.6 - 2026-11-10
 
 ### Track 1: Event-Driven Window & Task Tracking (from ManagedShell)

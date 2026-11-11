@@ -2123,13 +2123,41 @@ impl State {
         let Some(item) = index.checked_sub(1).and_then(|i| self.items.get(i + self.scroll)) else {
             return;
         };
-        let windows: Vec<_> = item.windows.iter().map(|window| window.hwnd).collect();
+        let windows: Vec<_> = item.windows.clone();
         let id = item.app.id.clone();
+        let app_name = item.app.name.clone();
+        let path = item.app.path.clone();
         let pinned = self.pinned.iter().any(|pin| pin.id.eq_ignore_ascii_case(&id));
         unsafe {
             let Ok(menu) = CreatePopupMenu() else {
                 return;
             };
+
+            // 1. If multiple windows are open, display window switcher entries at the top
+            if windows.len() > 1 {
+                for (w_idx, window) in windows.iter().enumerate().take(10) {
+                    let title = if window.title.len() > 45 {
+                        format!("{}...", &window.title[..42])
+                    } else if window.title.is_empty() {
+                        format!("{app_name} (Window {})", w_idx + 1)
+                    } else {
+                        window.title.clone()
+                    };
+                    let wide_title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = AppendMenuW(menu, MF_STRING, 100 + w_idx, PCWSTR(wide_title.as_ptr()));
+                }
+                let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+            }
+
+            // 2. Launch actions (New window, Run as Administrator, Open File Location)
+            let _ = AppendMenuW(menu, MF_STRING, 10, w!("New window"));
+            if path.is_some() {
+                let _ = AppendMenuW(menu, MF_STRING, 11, w!("Run as administrator"));
+                let _ = AppendMenuW(menu, MF_STRING, 12, w!("Open file location"));
+            }
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+            // 3. Pin / unpin actions
             let _ = AppendMenuW(
                 menu,
                 MF_STRING,
@@ -2143,12 +2171,20 @@ impl State {
             if pinned {
                 let _ = AppendMenuW(menu, MF_STRING, 3, w!("Unpin all"));
             }
+
+            // 4. Close action
+            let close_text = if windows.len() > 1 {
+                w!("Close all windows")
+            } else {
+                w!("Close window")
+            };
             let _ = AppendMenuW(
                 menu,
                 MF_STRING | if windows.is_empty() { MF_GRAYED } else { MF_ENABLED },
                 2,
-                w!("Close window(s)"),
+                close_text,
             );
+
             let mut point = POINT::default();
             let _ = GetCursorPos(&mut point);
             // Use the dock as menu owner. Its wndproc rejects RefCell reentrancy.
@@ -2164,14 +2200,28 @@ impl State {
             )
             .0;
             let _ = DestroyMenu(menu);
+
             if command == 1 {
                 self.toggle_pin(&id);
             } else if command == 3 {
                 self.pinned.clear();
                 self.save_pins();
             } else if command == 2 {
-                for hwnd in windows {
-                    let _ = open_windows::close(hwnd);
+                for window in &windows {
+                    let _ = open_windows::close(window.hwnd);
+                }
+            } else if command == 10 {
+                let _ = crate::launch::app(&id, path.as_deref(), false);
+            } else if command == 11 {
+                let _ = crate::launch::app(&id, path.as_deref(), true);
+            } else if command == 12 {
+                if let Some(p) = &path {
+                    let _ = crate::launch::reveal(p);
+                }
+            } else if (100..100 + windows.len()).contains(&(command as usize)) {
+                let w_idx = (command as usize) - 100;
+                if let Some(w) = windows.get(w_idx) {
+                    let _ = open_windows::focus(w.hwnd);
                 }
             }
         }

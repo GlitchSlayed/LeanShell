@@ -1,6 +1,6 @@
 [package]
 name = "leanshell-ui-slint"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2024"
 description = "Slint UI toolkit renderer backend for LeanShell"
 license = "MIT"
