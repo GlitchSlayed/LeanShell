@@ -2,6 +2,61 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.9 - 2026-11-11
+
+### Follow-Up Audit Remediation (U01–U14)
+
+- **U05 (P1) — Unicode title truncation abort eliminated**: Multi-window context menu previously sliced
+  `window.title[..42]` by byte offset, which panics and aborts the shell on any title where byte 42
+  falls inside a multi-byte character (emoji, CJK, Turkish dotted-I etc.). Replaced with
+  `title.chars().take(42).collect()` to truncate on character boundaries. (`src/dock.rs`)
+
+- **U06 (P1) — Startup command-line parser Unicode panic and `.exe`-in-directory misparse fixed**:
+  - Previous parser called `.to_lowercase()` on the command string and used that byte offset on the
+    original — Unicode lowercasing can change byte length (e.g. Turkish `İ`), causing an out-of-bounds
+    panic on startup which aborts the shell.
+  - Fixed by scanning the original bytes for `.exe` with ASCII-only case folding (`eq_ignore_ascii_case`),
+    never transferring byte offsets from a transformed string.
+  - Also fixed: a path like `C:\tools.exe-cache\app.exe` previously split at the directory component
+    (first `.exe`). The parser now requires the character after `.exe` to be end-of-string or whitespace,
+    and that the char before is not a path separator.
+  - Also fixed: Startup folder `.lnk` and `.url` shortcut files now launch via `launch::open()` (which
+    goes through ShellExecute), not `command_line()` — the parser has no way to parse a shortcut path.
+  - Added regression tests: `exe_in_directory_name_uses_last_exe`, `exe_followed_by_separator_is_not_target`,
+    `unicode_command_does_not_panic`. (`core/src/startup_cmd.rs`, `src/startup.rs`)
+
+- **U03 (P1) — Recovery CLI targets correct window class and uses correct quit protocol**:
+  - `--restore-shell` previously searched for `Wisp.Launcher` and `Wisp.Dock` (old class names) and sent
+    `WM_CLOSE` (which only hides the launcher, not quits it).
+  - Fixed to search for `LeanShell.Launcher` and `LeanShell.Nightly.Launcher`, send `WM_APP_QUIT`
+    (the real graceful quit message), wait for teardown, then proceed with registry restoration.
+  - Also fixed stale class names in `--diagnose` output. (`src/taskbar.rs`)
+
+- **U04 (P1) — Shell registration backup no longer overwrites itself on repeat registration**:
+  - Re-registering LeanShell as the shell overwrote the `OriginalShell` backup with `LeanShell` itself,
+    making `--unregister-shell` restore to LeanShell again (destroying the real prior shell reference).
+  - Fixed: backup is written **only once** — when no backup key exists yet. Subsequent
+    `--register-shell` calls are idempotent with respect to the original-shell backup.
+    (`platform-win/src/shell.rs`)
+
+- **U08 (P1) — Foreground activation no longer joins foreign input queues**:
+  - `AttachThreadInput` can propagate an unresponsive foreign thread's hang into the shell's UI thread
+    indefinitely (documented Windows risk per Raymond Chen's blog).
+  - Replaced with `AllowSetForegroundWindow(target_pid)` + `BringWindowToTop` + `SetForegroundWindow`,
+    which requests activation without joining queues. (`src/commands/open_windows.rs`)
+
+- **U13 (P2) — Key tracker: per-physical-key modifier tracking; Win key repeat fixed**:
+  - Single `bool` per modifier family (`ctrl_down`, `shift_down`, `alt_down`) caused
+    "left Ctrl down, right Ctrl down, left Ctrl up → Win tap treated as unmodified" — a chord
+    that wasn't recognized.
+  - Replaced with per-physical-key `KeyPair` bitmask tracking both left and right keys of each
+    modifier family independently.
+  - Win key-repeat events (multiple keydown while held) no longer reset `chord_detected`.
+  - Pressing both LWin and RWin is now treated as a chord (safe, never claims bare Win).
+  - Added regression tests: `test_dual_ctrl_keys_right_ctrl_still_held`,
+    `test_win_key_repeat_does_not_reset_chord`, `test_dual_win_keys_left_release_while_right_held`.
+    (`core/src/hook.rs`)
+
 ## 0.0.8 - 2026-11-11
 
 ### Comprehensive Architecture Stabilization & Audit Remediation (Findings 1-16)

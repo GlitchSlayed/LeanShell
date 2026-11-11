@@ -101,8 +101,13 @@ pub fn register_exclusive_shell(exe_path: &Path) -> Result<()> {
         ));
     }
 
-    // 1. Transactional Backup: preserve existing shell value if not already backed up
-    if let Some(existing) = get_registered_shell() {
+    // 1. Transactional Backup: preserve existing shell value ONLY if no backup exists yet.
+    //    If we unconditionally overwrite the backup on every registration, a second call to
+    //    register_exclusive_shell() while LeanShell is already registered would store
+    //    "LeanShell" as the OriginalShell, destroying the real prior shell reference.
+    if get_backup_shell().is_none()
+        && let Some(existing) = get_registered_shell()
+    {
         let wide_existing: Vec<u16> = existing.encode_utf16().chain(Some(0)).collect();
         // SAFETY: Storing backup key in HKCU
         unsafe {

@@ -167,8 +167,14 @@ fn launch_startup_folders() {
                     && let Some(ext) = path.extension().and_then(|e| e.to_str())
                 {
                     let ext = ext.to_lowercase();
-                    if matches!(ext.as_str(), "lnk" | "exe" | "bat" | "cmd") {
-                        let _ = crate::launch::command_line(&path.to_string_lossy());
+                    // .lnk and .url are shell shortcuts — ShellExecute handles them
+                    // correctly without any command-line parsing. .exe/.bat/.cmd are
+                    // plain executables that can be passed to execute().
+                    let path_str = path.to_string_lossy();
+                    if matches!(ext.as_str(), "lnk" | "url") {
+                        let _ = crate::launch::open(&path_str);
+                    } else if matches!(ext.as_str(), "exe" | "bat" | "cmd") {
+                        let _ = crate::launch::command_line(&path_str);
                     }
                 }
             }

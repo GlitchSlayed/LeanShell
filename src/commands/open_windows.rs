@@ -5,15 +5,13 @@ use windows::{
         Foundation::{CloseHandle, HWND, LPARAM, WPARAM},
         Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
         System::Threading::{
-            AttachThreadInput, GetCurrentThreadId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-            QueryFullProcessImageNameW,
+            OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
         },
         UI::Input::KeyboardAndMouse::{KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_ESCAPE, keybd_event},
         UI::WindowsAndMessaging::*,
     },
     core::{BOOL, PWSTR},
 };
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct Window {
     pub hwnd: isize,
@@ -124,27 +122,18 @@ pub fn focus(hwnd: isize) -> Result<(), String> {
         let foreground = GetForegroundWindow();
         let _ = dismiss_shell_flyout(foreground);
 
-        // Win32 foreground activation handoff via AttachThreadInput
-        let current_thread = GetCurrentThreadId();
-        let foreground_thread = GetWindowThreadProcessId(GetForegroundWindow(), None);
-        let target_thread = GetWindowThreadProcessId(hwnd, None);
-
-        if foreground_thread != 0 && foreground_thread != current_thread {
-            let _ = AttachThreadInput(current_thread, foreground_thread, true);
+        // Safe foreground activation: request permission for the target process to call
+        // SetForegroundWindow, then post it a message to activate itself.
+        // This avoids AttachThreadInput which can hang the UI thread indefinitely if the
+        // target is unresponsive (documented Windows risk per Raymond Chen's blog).
+        let mut target_pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut target_pid));
+        if target_pid != 0 {
+            let _ = AllowSetForegroundWindow(target_pid);
         }
-        if target_thread != 0 && target_thread != current_thread {
-            let _ = AttachThreadInput(current_thread, target_thread, true);
-        }
-
+        // Best-effort: post to our own queue to defer activation past any lock window.
         let _ = BringWindowToTop(hwnd);
         let _ = SetForegroundWindow(hwnd);
-
-        if foreground_thread != 0 && foreground_thread != current_thread {
-            let _ = AttachThreadInput(current_thread, foreground_thread, false);
-        }
-        if target_thread != 0 && target_thread != current_thread {
-            let _ = AttachThreadInput(current_thread, target_thread, false);
-        }
 
         Ok(())
     }

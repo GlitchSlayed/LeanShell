@@ -831,17 +831,27 @@ impl Drop for TaskbarHider {
 pub fn restore_shell_cli() -> Result<()> {
     println!("LeanShell: Coordinated recovery starting...");
 
-    // 1. Signal any running LeanShell instance to close and release its hooks and appbars
+    // 1. Signal any running LeanShell instance to quit and release its hooks and appbars.
+    //    Use the actual window class names from src/channel.rs / src/dock.rs, and the real
+    //    quit protocol (WM_APP + 4 = WM_APP_QUIT, which triggers clean shutdown) rather than
+    //    WM_CLOSE (which only hides the launcher window).
+    const WM_APP_QUIT: u32 = WM_APP + 4;
     unsafe {
-        if let Ok(launcher) = FindWindowW(w!("Wisp.Launcher"), None)
-            && !launcher.is_invalid()
-        {
-            let _ = PostMessageW(Some(launcher), WM_CLOSE, WPARAM(0), LPARAM(0));
+        // Both stable and nightly launcher class names
+        for class in [w!("LeanShell.Launcher"), w!("LeanShell.Nightly.Launcher")] {
+            if let Ok(launcher) = FindWindowW(class, None)
+                && !launcher.is_invalid()
+            {
+                let _ = PostMessageW(Some(launcher), WM_APP_QUIT, WPARAM(0), LPARAM(0));
+                // Give the instance a moment to tear down its appbars and hooks before we proceed.
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
         }
+        // Dock window (registered class is "Wisp.Dock" for legacy; LeanShell keeps that class name)
         if let Ok(dock) = FindWindowW(w!("Wisp.Dock"), None)
             && !dock.is_invalid()
         {
-            let _ = PostMessageW(Some(dock), WM_CLOSE, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(Some(dock), WM_APP_QUIT, WPARAM(0), LPARAM(0));
         }
     }
 
@@ -913,7 +923,9 @@ pub fn print_diagnostics() {
         println!("GetShellWindow(): {:?}", shell_wnd.0);
         let tray = FindWindowW(w!("Shell_TrayWnd"), None);
         println!("Shell_TrayWnd: {:?}", tray.map(|h| h.0));
-        let launcher = FindWindowW(w!("Wisp.Launcher"), None);
+        // Check both stable and nightly launcher class names
+        let launcher = FindWindowW(w!("LeanShell.Launcher"), None)
+            .or_else(|_| FindWindowW(w!("LeanShell.Nightly.Launcher"), None));
         println!("LeanShell Launcher HWND: {:?}", launcher.map(|h| h.0));
         let dock = FindWindowW(w!("Wisp.Dock"), None);
         println!("LeanShell Dock HWND: {:?}", dock.map(|h| h.0));

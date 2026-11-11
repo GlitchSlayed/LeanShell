@@ -37,10 +37,31 @@ pub fn parse_command_line(cmd: &str) -> Option<ParsedCommandLine> {
             })
         }
     } else {
-        // Unquoted executable: check for .exe boundary or first space
-        let lower = trimmed.to_lowercase();
-        if let Some(exe_pos) = lower.find(".exe") {
-            let exe_end = exe_pos + 4;
+        // Unquoted executable: search for ".exe" (ASCII-only, case-insensitive) followed by
+        // end-of-string, whitespace, or a flag character. Crucially we find the position in
+        // the ORIGINAL string — never apply an offset from a `.to_lowercase()` result, because
+        // Unicode lowercase can change byte length (e.g. 'İ' → "i\u{307}").
+        //
+        // We also require that the character immediately preceding ".exe" is NOT a path
+        // separator, to avoid splitting on directory components like "C:\tools.exe-cache\app.exe".
+        let exe_suffix = b".exe";
+        let bytes = trimmed.as_bytes();
+        let mut found_exe_end: Option<usize> = None;
+        for start in 0..bytes.len().saturating_sub(3) {
+            if bytes[start..start + 4].eq_ignore_ascii_case(exe_suffix) {
+                let end = start + 4;
+                // The char after ".exe" must be end-of-string, whitespace, or a switch char.
+                let next_ok = end >= bytes.len() || bytes[end] == b' ' || bytes[end] == b'\t';
+                // The char before ".exe" must not be a path separator (avoid dir components).
+                let prev_ok = start == 0 || (bytes[start - 1] != b'\\' && bytes[start - 1] != b'/');
+                if next_ok && prev_ok {
+                    found_exe_end = Some(end);
+                    break;
+                }
+            }
+        }
+
+        if let Some(exe_end) = found_exe_end {
             let target = trimmed[..exe_end].trim().to_string();
             let remaining = trimmed[exe_end..].trim();
             let args = if remaining.is_empty() {
@@ -151,5 +172,40 @@ mod tests {
         assert!(!prefix.defer_deletion);
         assert!(!prefix.allow_safe_mode);
         assert_eq!(clean, "NormalTask");
+    }
+
+    /// U06 regression: .exe in a directory component must not split the path there.
+    /// "C:\tools.exe-cache\app.exe --flag" should produce target="C:\tools.exe-cache\app.exe".
+    #[test]
+    fn exe_in_directory_name_uses_last_exe() {
+        let parsed = parse_command_line(r"C:\tools.exe-cache\app.exe --flag").unwrap();
+        assert_eq!(parsed.target, r"C:\tools.exe-cache\app.exe");
+        assert_eq!(parsed.args.as_deref(), Some("--flag"));
+    }
+
+    /// U06 regression: .exe immediately followed by a path separator is a dir component, not an exe.
+    #[test]
+    fn exe_followed_by_separator_is_not_target() {
+        // "C:\foo.exe\bar.exe" — the first .exe is a dir, the second is the target.
+        let parsed = parse_command_line(r"C:\foo.exe\bar.exe").unwrap();
+        assert_eq!(parsed.target, r"C:\foo.exe\bar.exe");
+        assert_eq!(parsed.args, None);
+    }
+
+    /// U06 regression: Unicode command-line must never panic.
+    /// A string containing a multi-byte char (Turkish 'İ' lowercases to two bytes) must
+    /// parse without panicking.
+    #[test]
+    fn unicode_command_does_not_panic() {
+        // This would panic with the old to_lowercase() byte-offset approach
+        let result = parse_command_line(r"C:\İ.exe --arg");
+        // We don't assert exact output since OS path handling varies, just that it doesn't panic.
+        let _ = result;
+
+        // Also check with emoji in path (multi-byte UTF-8)
+        let result2 = parse_command_line(r"C:\App 🚀\launcher.exe --start");
+        if let Some(parsed) = result2 {
+            assert!(parsed.target.ends_with("launcher.exe"));
+        }
     }
 }

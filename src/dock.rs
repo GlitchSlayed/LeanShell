@@ -2272,8 +2272,10 @@ impl State {
             // 1. If multiple windows are open, display window switcher entries at the top
             if windows.len() > 1 {
                 for (w_idx, window) in windows.iter().enumerate().take(10) {
-                    let title = if window.title.len() > 45 {
-                        format!("{}...", &window.title[..42])
+                    // Truncate on char boundaries (not bytes) to avoid panics on multi-byte chars.
+                    let title = if window.title.chars().count() > 45 {
+                        let truncated: String = window.title.chars().take(42).collect();
+                        format!("{truncated}...")
                     } else if window.title.is_empty() {
                         format!("{app_name} (Window {})", w_idx + 1)
                     } else {
