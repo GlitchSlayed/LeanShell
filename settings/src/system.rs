@@ -173,6 +173,13 @@ pub fn open_config(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("Cannot open config.toml: {error}"))
 }
 
+pub fn open_url(url: &str) {
+    let url_wide = wide(url);
+    unsafe {
+        let _ = ShellExecuteW(None, w!("open"), PCWSTR(url_wide.as_ptr()), None, None, SW_SHOWNORMAL);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

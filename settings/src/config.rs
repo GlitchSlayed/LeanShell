@@ -22,6 +22,10 @@ pub struct Config {
     pub dock_icon_size: i64,
     pub hide_taskbar: bool,
     pub window_list: String,
+    pub display_mode: String,
+    pub panel_edge: String,
+    pub shell_mode: String,
+    pub watchdog: bool,
 }
 
 impl Default for Config {
@@ -54,6 +58,13 @@ impl Config {
         choice(&position, &["center", "bottom"], "position")?;
         let window_list = string("window_list")?;
         choice(&window_list, &["always", "multiple", "off"], "window_list")?;
+        let display_mode = string("display_mode").unwrap_or_else(|_| "dock".into());
+        choice(&display_mode, &["dock", "panel", "center"], "display_mode")?;
+        let panel_edge = string("panel_edge").unwrap_or_else(|_| "bottom".into());
+        choice(&panel_edge, &["bottom", "top", "left", "right"], "panel_edge")?;
+        let shell_mode = string("shell_mode").unwrap_or_else(|_| "companion".into());
+        choice(&shell_mode, &["companion", "exclusive"], "shell_mode")?;
+        let watchdog = boolean("watchdog").unwrap_or(true);
         let dock_icon_size = get("dock_icon_size")
             .as_integer()
             .filter(|value| *value >= 0)
@@ -90,6 +101,10 @@ impl Config {
             dock_icon_size,
             hide_taskbar: boolean("hide_taskbar")?,
             window_list,
+            display_mode,
+            panel_edge,
+            shell_mode,
+            watchdog,
         })
     }
 }
@@ -219,7 +234,19 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         "window_list" if !matches!(value.as_str(), Some("always" | "multiple" | "off")) => {
             return Err("window_list must be always, multiple or off.".into());
         }
-        "window_list" => {}
+        "display_mode" if !matches!(value.as_str(), Some("dock" | "panel" | "center")) => {
+            return Err("display_mode must be dock, panel or center.".into());
+        }
+        "panel_edge" if !matches!(value.as_str(), Some("bottom" | "top" | "left" | "right")) => {
+            return Err("panel_edge must be bottom, top, left or right.".into());
+        }
+        "shell_mode" if !matches!(value.as_str(), Some("companion" | "exclusive")) => {
+            return Err("shell_mode must be companion or exclusive.".into());
+        }
+        "watchdog" if value.as_bool().is_none() => {
+            return Err("watchdog must be true or false.".into());
+        }
+        "window_list" | "display_mode" | "panel_edge" | "shell_mode" | "watchdog" => {}
         _ => return Err(format!("Unknown setting: {key}")),
     }
     Ok(())
@@ -247,6 +274,10 @@ mod tests {
         assert_eq!(old.position, "center");
         assert_eq!(old.max_results, config.max_results);
         assert_eq!(config.window_list, "multiple");
+        assert_eq!(config.display_mode, "dock");
+        assert_eq!(config.panel_edge, "bottom");
+        assert_eq!(config.shell_mode, "companion");
+        assert!(config.watchdog);
         assert_eq!(Config::from_document(&DEFAULT_CONFIG.parse().unwrap()).unwrap(), config);
     }
 

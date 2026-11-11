@@ -1,0 +1,774 @@
+import { Button, CheckBox, ComboBox, LineEdit, Slider, Switch, ScrollView } from "std-widgets.slint";
+
+export component SettingsWindow inherits Window {
+    title: is_onboarding ? "Welcome to LeanShell" : "LeanShell Settings";
+    min_width: is_onboarding ? 560px : 780px;
+    min_height: is_onboarding ? 460px : 560px;
+    preferred_width: is_onboarding ? 580px : 820px;
+    preferred_height: is_onboarding ? 480px : 600px;
+    background: #1e1e1e;
+    default_font_family: "Segoe UI Variable Text, Segoe UI, sans-serif";
+
+    // Navigation and Mode
+    in_out property <bool> is_onboarding: false;
+    in_out property <int> onboarding_step: 0;
+    in_out property <int> current_page: 0; // 0: General, 1: Appearance, 2: Search, 3: About
+
+    // General Settings
+    in_out property <string> hotkey: "Alt+Space";
+    in_out property <string> display_mode: "dock"; // "dock", "panel", "center"
+    in_out property <string> panel_edge: "bottom"; // "bottom", "top", "left", "right"
+    in_out property <string> shell_mode: "companion"; // "companion", "exclusive"
+    in_out property <bool> watchdog: true;
+    in_out property <bool> hide_taskbar: true;
+    in_out property <bool> dock_enabled: true;
+    in_out property <bool> dock_autohide: true;
+    in_out property <int> dock_icon_size: 32;
+    in_out property <string> window_list: "multiple"; // "multiple", "always", "off"
+    in_out property <bool> autostart: false;
+    in_out property <int> pinned_count: 0;
+
+    // Appearance Settings
+    in_out property <string> theme_setting: "system"; // "system", "dark", "light"
+    in_out property <string> backdrop_setting: "acrylic"; // "acrylic", "mica", "solid"
+    in_out property <string> position_setting: "bottom"; // "bottom", "center"
+
+    // Search Settings
+    in_out property <int> max_results: 8;
+    in_out property <bool> show_recent: true;
+    in_out property <string> search_url: "https://www.google.com/search?q={query}";
+    in_out property <bool> file_search: true;
+    in_out property <string> new_exclude_folder: "";
+
+    // About & Update
+    in_out property <string> version_text: "0.0.1";
+    in_out property <string> config_path: "";
+    in_out property <string> update_status: "You have the latest version.";
+    in_out property <bool> update_available: false;
+    in_out property <string> status_message: "";
+
+    // Callbacks
+    callback hotkey_changed(string);
+    callback display_mode_changed(string);
+    callback panel_edge_changed(string);
+    callback shell_mode_changed(string);
+    callback watchdog_changed(bool);
+    callback hide_taskbar_changed(bool);
+    callback dock_enabled_changed(bool);
+    callback dock_autohide_changed(bool);
+    callback dock_icon_size_changed(int);
+    callback window_list_changed(string);
+    callback autostart_changed(bool);
+    callback unpin_all_clicked();
+    callback theme_changed(string);
+    callback backdrop_changed(string);
+    callback position_changed(string);
+    callback max_results_changed(int);
+    callback show_recent_changed(bool);
+    callback search_url_changed(string);
+    callback file_search_changed(bool);
+    callback add_exclude_folder(string);
+    callback open_config_clicked();
+    callback open_github_clicked();
+    callback check_updates_clicked();
+    callback next_onboarding_clicked();
+    callback finish_onboarding_clicked();
+
+    if is_onboarding: VerticalLayout {
+        padding: 32px;
+        spacing: 24px;
+        alignment: space_between;
+
+        VerticalLayout {
+            spacing: 12px;
+            Text {
+                text: onboarding_step == 0 ? "Welcome to LeanShell" : (onboarding_step == 1 ? "Configure Shortcut" : "Start with Windows");
+                font_size: 24px;
+                font_weight: 600;
+                color: #ffffff;
+            }
+            Text {
+                text: onboarding_step == 0 ? "LeanShell replaces your Windows taskbar with a high-performance dock, panel, and search launcher that idles at ~0% CPU and low memory." : (onboarding_step == 1 ? "Choose the shortcut that summons the search launcher from anywhere." : "Launch LeanShell automatically when you sign in to Windows.");
+                font_size: 14px;
+                color: #cccccc;
+                wrap: word-wrap;
+            }
+        }
+
+        if onboarding_step == 0: VerticalLayout {
+            spacing: 16px;
+            Rectangle {
+                background: #2b2b2b;
+                border_radius: 8px;
+                border_width: 1px;
+                border_color: #3d3d3d;
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 8px;
+                    Text {
+                        text: "• Touch the bottom screen edge to reveal the dock";
+                        font_size: 14px;
+                        color: #ffffff;
+                    }
+                    Text {
+                        text: "• Press Alt+Space to open the instant launcher";
+                        font_size: 14px;
+                        color: #ffffff;
+                    }
+                    Text {
+                        text: "• Type app or file names, calculations, or web searches";
+                        font_size: 14px;
+                        color: #ffffff;
+                    }
+                }
+            }
+        }
+
+        if onboarding_step == 1: VerticalLayout {
+            spacing: 16px;
+            Rectangle {
+                background: #2b2b2b;
+                border_radius: 8px;
+                border_width: 1px;
+                border_color: #3d3d3d;
+
+                HorizontalLayout {
+                    padding: 16px;
+                    alignment: space_between;
+                    Text {
+                        text: "Launcher Shortcut:";
+                        font_size: 14px;
+                        color: #ffffff;
+                        vertical_alignment: center;
+                    }
+                    LineEdit {
+                        text: hotkey;
+                        width: 180px;
+                        accepted(val) => { root.hotkey_changed(val); }
+                    }
+                }
+            }
+        }
+
+        if onboarding_step == 2: VerticalLayout {
+            spacing: 16px;
+            Rectangle {
+                background: #2b2b2b;
+                border_radius: 8px;
+                border_width: 1px;
+                border_color: #3d3d3d;
+
+                HorizontalLayout {
+                    padding: 16px;
+                    alignment: space_between;
+                    Text {
+                        text: "Open LeanShell when you sign in:";
+                        font_size: 14px;
+                        color: #ffffff;
+                        vertical_alignment: center;
+                    }
+                    Switch {
+                        checked: autostart;
+                        toggled => { root.autostart_changed(self.checked); }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 12px;
+            if onboarding_step < 2: Button {
+                text: "Next";
+                primary: true;
+                clicked => { root.next_onboarding_clicked(); }
+            }
+            if onboarding_step >= 2: Button {
+                text: "Get Started";
+                primary: true;
+                clicked => { root.finish_onboarding_clicked(); }
+            }
+        }
+    }
+
+    if !is_onboarding: HorizontalLayout {
+        // Left Sidebar
+        Rectangle {
+            width: 200px;
+            background: #252525;
+            border_width: 1px;
+            border_color: #333333;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 8px;
+
+                // Title
+                HorizontalLayout {
+                    spacing: 8px;
+                    padding_bottom: 12px;
+                    Text {
+                        text: "LeanShell";
+                        font_size: 18px;
+                        font_weight: 700;
+                        color: #ffffff;
+                        vertical_alignment: center;
+                    }
+                }
+
+                // Nav items
+                Rectangle {
+                    height: 36px;
+                    background: current_page == 0 ? #383838 : #252525;
+                    border_radius: 6px;
+                    TouchArea {
+                        clicked => { current_page = 0; }
+                    }
+                    Text {
+                        text: " General";
+                        font_size: 14px;
+                        font_weight: current_page == 0 ? 600 : 400;
+                        color: current_page == 0 ? #ffffff : #bbbbbb;
+                        x: 12px;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+
+                Rectangle {
+                    height: 36px;
+                    background: current_page == 1 ? #383838 : #252525;
+                    border_radius: 6px;
+                    TouchArea {
+                        clicked => { current_page = 1; }
+                    }
+                    Text {
+                        text: " Appearance";
+                        font_size: 14px;
+                        font_weight: current_page == 1 ? 600 : 400;
+                        color: current_page == 1 ? #ffffff : #bbbbbb;
+                        x: 12px;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+
+                Rectangle {
+                    height: 36px;
+                    background: current_page == 2 ? #383838 : #252525;
+                    border_radius: 6px;
+                    TouchArea {
+                        clicked => { current_page = 2; }
+                    }
+                    Text {
+                        text: " Search";
+                        font_size: 14px;
+                        font_weight: current_page == 2 ? 600 : 400;
+                        color: current_page == 2 ? #ffffff : #bbbbbb;
+                        x: 12px;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+
+                Rectangle {
+                    height: 36px;
+                    background: current_page == 3 ? #383838 : #252525;
+                    border_radius: 6px;
+                    TouchArea {
+                        clicked => { current_page = 3; }
+                    }
+                    Text {
+                        text: " About";
+                        font_size: 14px;
+                        font_weight: current_page == 3 ? 600 : 400;
+                        color: current_page == 3 ? #ffffff : #bbbbbb;
+                        x: 12px;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+
+                // Spacer
+                Rectangle { }
+
+                if status_message != "": Text {
+                    text: status_message;
+                    font_size: 12px;
+                    color: #4cc2ff;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // Right Content Area
+        ScrollView {
+            VerticalLayout {
+                padding: 24px;
+                spacing: 20px;
+
+                // PAGE 0: GENERAL
+                if current_page == 0: VerticalLayout {
+                    spacing: 16px;
+
+                    Text {
+                        text: "General Settings";
+                        font_size: 22px;
+                        font_weight: 600;
+                        color: #ffffff;
+                    }
+
+                    // Shell & Panel Card
+                    Rectangle {
+                        background: #2b2b2b;
+                        border_radius: 8px;
+                        border_width: 1px;
+                        border_color: #383838;
+
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 14px;
+
+                            Text {
+                                text: "Shell & Panel";
+                                font_size: 15px;
+                                font_weight: 600;
+                                color: #4cc2ff;
+                            }
+
+                            // Display Mode
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Display Mode"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Dock (floating autohide), Panel (reserved taskbar), or Center"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                ComboBox {
+                                    width: 170px;
+                                    model: ["dock", "panel", "center"];
+                                    current_value: display_mode;
+                                    selected(val) => { root.display_mode_changed(val); }
+                                }
+                            }
+
+                            // Panel Edge
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Panel Screen Edge"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Edge of screen to anchor the panel AppBar"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                ComboBox {
+                                    width: 170px;
+                                    model: ["bottom", "top", "left", "right"];
+                                    current_value: panel_edge;
+                                    selected(val) => { root.panel_edge_changed(val); }
+                                }
+                            }
+
+                            // Shell Mode
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Shell Mode"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Companion (hides taskbar) or Exclusive shell"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                ComboBox {
+                                    width: 170px;
+                                    model: ["companion", "exclusive"];
+                                    current_value: shell_mode;
+                                    selected(val) => { root.shell_mode_changed(val); }
+                                }
+                            }
+
+                            // Watchdog
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Watchdog Supervisor"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Auto-restore Windows Taskbar if LeanShell crashes"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Switch {
+                                    checked: watchdog;
+                                    toggled => { root.watchdog_changed(self.checked); }
+                                }
+                            }
+                        }
+                    }
+
+                    // Taskbar & Dock Card
+                    Rectangle {
+                        background: #2b2b2b;
+                        border_radius: 8px;
+                        border_width: 1px;
+                        border_color: #383838;
+
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 14px;
+
+                            Text {
+                                text: "Dock & Windows Taskbar";
+                                font_size: 15px;
+                                font_weight: 600;
+                                color: #4cc2ff;
+                            }
+
+                            // Hide Taskbar
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Hide Windows Taskbar"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Hide the Windows taskbar while LeanShell is running"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Switch {
+                                    checked: hide_taskbar;
+                                    toggled => { root.hide_taskbar_changed(self.checked); }
+                                }
+                            }
+
+                            // Keep Dock Visible
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Autohide Dock"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Slide out only when pointer touches the screen edge"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Switch {
+                                    checked: dock_autohide;
+                                    toggled => { root.dock_autohide_changed(self.checked); }
+                                }
+                            }
+
+                            // Window List
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "App Window List"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Hovering running apps lists open windows"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                ComboBox {
+                                    width: 170px;
+                                    model: ["multiple", "always", "off"];
+                                    current_value: window_list;
+                                    selected(val) => { root.window_list_changed(val); }
+                                }
+                            }
+
+                            // App Icon Size
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "App Icon Size (" + dock_icon_size + " DIP)"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Scale dock icons and spacing from 24 to 40"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Slider {
+                                    width: 170px;
+                                    minimum: 24;
+                                    maximum: 40;
+                                    value: dock_icon_size;
+                                    changed(val) => { root.dock_icon_size_changed(Math.round(val)); }
+                                }
+                            }
+
+                            // Unpin All Apps
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Pinned Apps (" + pinned_count + " pinned)"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Remove all pinned dock apps"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Button {
+                                    text: "Unpin All";
+                                    enabled: pinned_count > 0;
+                                    clicked => { root.unpin_all_clicked(); }
+                                }
+                            }
+                        }
+                    }
+
+                    // Hotkey & Startup Card
+                    Rectangle {
+                        background: #2b2b2b;
+                        border_radius: 8px;
+                        border_width: 1px;
+                        border_color: #383838;
+
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 14px;
+
+                            Text {
+                                text: "Launcher & Startup";
+                                font_size: 15px;
+                                font_weight: 600;
+                                color: #4cc2ff;
+                            }
+
+                            // Shortcut
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Launcher Shortcut"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Keyboard shortcut to summon LeanShell"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                LineEdit {
+                                    width: 170px;
+                                    text: hotkey;
+                                    accepted(val) => { root.hotkey_changed(val); }
+                                }
+                            }
+
+                            // Start with Windows
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Start with Windows"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Launch LeanShell automatically when signing in"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Switch {
+                                    checked: autostart;
+                                    toggled => { root.autostart_changed(self.checked); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // PAGE 1: APPEARANCE
+                if current_page == 1: VerticalLayout {
+                    spacing: 16px;
+
+                    Text {
+                        text: "Appearance";
+                        font_size: 22px;
+                        font_weight: 600;
+                        color: #ffffff;
+                    }
+
+                    Rectangle {
+                        background: #2b2b2b;
+                        border_radius: 8px;
+                        border_width: 1px;
+                        border_color: #383838;
+
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 14px;
+
+                            // Theme
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Theme"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "System color scheme or forced dark/light"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                ComboBox {
+                                    width: 170px;
+                                    model: ["system", "dark", "light"];
+                                    current_value: theme_setting;
+                                    selected(val) => { root.theme_changed(val); }
+                                }
+                            }
+
+                            // Backdrop
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Launcher Backdrop"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Acrylic blur, Mica material, or solid background"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                ComboBox {
+                                    width: 170px;
+                                    model: ["acrylic", "mica", "solid"];
+                                    current_value: backdrop_setting;
+                                    selected(val) => { root.backdrop_changed(val); }
+                                }
+                            }
+
+                            // Launcher Position
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Launcher Position"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Bottom edge or screen center"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                ComboBox {
+                                    width: 170px;
+                                    model: ["bottom", "center"];
+                                    current_value: position_setting;
+                                    selected(val) => { root.position_changed(val); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // PAGE 2: SEARCH
+                if current_page == 2: VerticalLayout {
+                    spacing: 16px;
+
+                    Text {
+                        text: "Search";
+                        font_size: 22px;
+                        font_weight: 600;
+                        color: #ffffff;
+                    }
+
+                    Rectangle {
+                        background: #2b2b2b;
+                        border_radius: 8px;
+                        border_width: 1px;
+                        border_color: #383838;
+
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 14px;
+
+                            // Max Results
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Max Visible Results (" + max_results + ")"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Number of search results visible before scrolling"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Slider {
+                                    width: 170px;
+                                    minimum: 4;
+                                    maximum: 16;
+                                    value: max_results;
+                                    changed(val) => { root.max_results_changed(Math.round(val)); }
+                                }
+                            }
+
+                            // Show Recent
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Show Recent Apps"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Display recently launched apps when query is empty"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Switch {
+                                    checked: show_recent;
+                                    toggled => { root.show_recent_changed(self.checked); }
+                                }
+                            }
+
+                            // File Search
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "File Search"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Query files using the Windows Search index"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Switch {
+                                    checked: file_search;
+                                    toggled => { root.file_search_changed(self.checked); }
+                                }
+                            }
+
+                            // Search URL
+                            VerticalLayout {
+                                spacing: 6px;
+                                Text { text: "Web Search URL ({query} is replaced)"; font_size: 14px; color: #ffffff; }
+                                LineEdit {
+                                    text: search_url;
+                                    accepted(val) => { root.search_url_changed(val); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // PAGE 3: ABOUT
+                if current_page == 3: VerticalLayout {
+                    spacing: 16px;
+
+                    Text {
+                        text: "About LeanShell";
+                        font_size: 22px;
+                        font_weight: 600;
+                        color: #ffffff;
+                    }
+
+                    Rectangle {
+                        background: #2b2b2b;
+                        border_radius: 8px;
+                        border_width: 1px;
+                        border_color: #383838;
+
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 16px;
+
+                            Text {
+                                text: "LeanShell " + version_text;
+                                font_size: 18px;
+                                font_weight: 700;
+                                color: #ffffff;
+                            }
+                            Text {
+                                text: "High-performance Windows 11 shell, dock, and launcher with ~0% idle resource usage.";
+                                font_size: 13px;
+                                color: #cccccc;
+                            }
+
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Configuration File"; font_size: 14px; color: #ffffff; }
+                                    Text { text: config_path; font_size: 11px; color: #888888; }
+                                }
+                                Button {
+                                    text: "Open Config";
+                                    clicked => { root.open_config_clicked(); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Source Repository"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "github.com/GlitchSlayed/LeanShell"; font_size: 12px; color: #4cc2ff; }
+                                }
+                                Button {
+                                    text: "GitHub";
+                                    clicked => { root.open_github_clicked(); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Updates"; font_size: 14px; color: #ffffff; }
+                                    Text { text: update_status; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Button {
+                                    text: "Check Updates";
+                                    clicked => { root.check_updates_clicked(); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

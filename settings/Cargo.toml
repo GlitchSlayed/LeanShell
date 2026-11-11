@@ -12,7 +12,7 @@ nightly = []
 
 [dependencies]
 leanshell-core = { path = "../core" }
-gpui-kit = { version = "0.8", default-features = false, features = ["component"] }
+slint = "1.18"
 toml_edit = "0.23"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
@@ -22,6 +22,7 @@ tempfile = "3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
+slint-build = "1.18"
 winresource = "0.1"
 
 [dependencies.windows]
@@ -30,6 +31,7 @@ features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Networking_WinHttp",
+    "Win32_Security",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Registry",
     "Win32_System_Threading",

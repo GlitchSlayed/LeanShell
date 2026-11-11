@@ -1,5 +1,6 @@
 fn main() {
     println!("cargo:rerun-if-changed=../assets/wisp.ico");
+    slint_build::compile("ui/settings.slint").expect("Slint compilation failed");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
         let nightly = std::env::var_os("CARGO_FEATURE_NIGHTLY").is_some();
