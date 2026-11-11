@@ -10,3 +10,6 @@ display_mode = "dock"
 panel_edge = "bottom"
 watchdog = true
 claim_win_key = true
+backend = "direct2d"
+slint_renderer = "skia"
+

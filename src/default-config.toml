@@ -68,3 +68,10 @@ watchdog = true
 # Windows chords (Win+E, Win+R, Win+D, Win+L, etc.) still pass through unchanged.
 claim_win_key = true
 
+# Rendering backend: "direct2d" (native reference renderer) or "slint" (optional Slint UI toolkit backend).
+backend = "direct2d"
+
+# Slint backend renderer: "skia" (default high-performance 2D), "vello" (experimental GPU compute), or "software".
+slint_renderer = "skia"
+
+

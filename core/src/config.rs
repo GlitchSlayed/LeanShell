@@ -75,6 +75,25 @@ pub enum PanelEdge {
     Right,
 }
 
+/// Rendering backend to draw the launcher and dock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    #[default]
+    Direct2d,
+    Slint,
+}
+
+/// Renderer subsystem inside the Slint backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SlintRendererConfig {
+    #[default]
+    Skia,
+    Vello,
+    Software,
+}
+
 /// Keys missing from the user's file take their value from `config-0.3.toml`,
 /// then from the default config.
 #[derive(Debug, Clone, Deserialize)]
@@ -104,6 +123,10 @@ pub struct Config {
     pub watchdog: bool,
     #[serde(default = "default_true")]
     pub claim_win_key: bool,
+    #[serde(default)]
+    pub backend: Backend,
+    #[serde(default)]
+    pub slint_renderer: SlintRendererConfig,
 }
 
 fn default_true() -> bool {
@@ -218,5 +241,16 @@ mod tests {
         assert!(!config.claim_win_key);
         let default = Config::default();
         assert!(default.claim_win_key);
+    }
+
+    #[test]
+    fn backend_and_slint_renderer_deserialize() {
+        let config = Config::parse("backend = \"slint\"\nslint_renderer = \"vello\"").unwrap();
+        assert_eq!(config.backend, Backend::Slint);
+        assert_eq!(config.slint_renderer, SlintRendererConfig::Vello);
+
+        let default = Config::default();
+        assert_eq!(default.backend, Backend::Direct2d);
+        assert_eq!(default.slint_renderer, SlintRendererConfig::Skia);
     }
 }

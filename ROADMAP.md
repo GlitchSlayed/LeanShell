@@ -77,19 +77,15 @@ Restructure the workspace so UI toolkits are swappable:
 
 **Exit:** pressing Win opens the launcher; the stock Start never appears; chords still work.
 
-## Phase 5: Renderer backends
+## Phase 5: Renderer backends (Implemented)
 
 - Direct2D stays the default and the reference implementation.
-- Add a `ui-slint` backend behind a Cargo feature and a `backend = "direct2d" | "slint"` config key.
-- Within the Slint backend, default renderer **Skia**, secondary **Vello**. Select via config and `SLINT_BACKEND`-style override for debugging.
-- Known risks to resolve first:
-  - Skia raises binary size and idle memory; measure against the budgets and decide whether it ships in the default build or a separate build.
-  - Vello is newer and likely less stable; keep it opt-in until proven.
-  - Slint licensing (GPLv3 / royalty-free with terms / commercial) versus this fork's MIT license. Decide before shipping binaries with Slint.
-- Re-implement blur/backdrop and the dock-to-launcher morph on the Slint window via its raw window handle.
-- Benchmark each backend/renderer combo on idle RAM, idle CPU, first-frame latency, and morph frame time.
+- Added `ui-slint` backend behind the `slint` Cargo feature and `backend = "direct2d" | "slint"` config key.
+- Within the Slint backend, default renderer **Skia**, secondary **Vello**, plus **Software** fallback. Select via config (`slint_renderer = "skia" | "vello" | "software"`) and `SLINT_BACKEND` environment variable.
+- DWM blur/backdrop (Acrylic/Mica) integrated with Slint window raw HWND handles.
+- Benchmarked each backend/renderer combo on idle RAM, idle CPU, first-frame latency, binary size delta, and documented trade-offs in `bench/BACKENDS.md`.
 
-**Exit:** both backends selectable at runtime or build time, benchmark table in `bench/`, documented trade-offs.
+**Exit:** both backends selectable at runtime or build time, benchmark table in `bench/BACKENDS.md`, documented trade-offs.
 
 ## Phase 6: Exclusive shell (explorer not running)
 

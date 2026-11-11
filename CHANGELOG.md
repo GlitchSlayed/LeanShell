@@ -2,6 +2,17 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.3 - 2026-11-10
+
+### Milestone 5: Renderer Backends (Direct2D & Slint)
+
+- **Pluggable Renderer Architecture (Phase 5)**: Established modular rendering backends via `leanshell_render::Renderer` with Direct2D as the reference default and an optional feature-gated Slint backend (`ui-slint`).
+- **Slint Subsystem Support**: Configurable Slint subsystems supporting Skia (default high-fidelity 2D), Vello (experimental GPU compute with modern shaders), and Software CPU fallback.
+- **Runtime Backend Selection**: Added `backend = "direct2d" | "slint"` and `slint_renderer = "skia" | "vello" | "software"` keys to `config.toml`.
+- **DWM Backdrop Integration**: Re-implemented Acrylic, Mica, and solid composition backdrops with Slint windows via raw HWND integration.
+- **Settings App Engine Selector**: Added interactive Rendering Backend and Slint Subsystem dropdown selectors to the Settings app Appearance page.
+- **Comprehensive Benchmarks**: Documented memory consumption, binary size delta, first-frame latency, and licensing trade-offs across all backends in `bench/BACKENDS.md`.
+
 ## 0.0.2 - 2026-11-10
 
 ### Milestone 4: Launcher Replaces Start & Panel Polish

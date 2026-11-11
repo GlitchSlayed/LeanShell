@@ -27,6 +27,8 @@ pub struct Config {
     pub shell_mode: String,
     pub watchdog: bool,
     pub claim_win_key: bool,
+    pub backend: String,
+    pub slint_renderer: String,
 }
 
 impl Default for Config {
@@ -67,6 +69,10 @@ impl Config {
         choice(&shell_mode, &["companion", "exclusive"], "shell_mode")?;
         let watchdog = boolean("watchdog").unwrap_or(true);
         let claim_win_key = boolean("claim_win_key").unwrap_or(true);
+        let backend = string("backend").unwrap_or_else(|_| "direct2d".into());
+        choice(&backend, &["direct2d", "slint"], "backend")?;
+        let slint_renderer = string("slint_renderer").unwrap_or_else(|_| "skia".into());
+        choice(&slint_renderer, &["skia", "vello", "software"], "slint_renderer")?;
         let dock_icon_size = get("dock_icon_size")
             .as_integer()
             .filter(|value| *value >= 0)
@@ -108,6 +114,8 @@ impl Config {
             shell_mode,
             watchdog,
             claim_win_key,
+            backend,
+            slint_renderer,
         })
     }
 }
@@ -252,7 +260,14 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         "claim_win_key" if value.as_bool().is_none() => {
             return Err("claim_win_key must be true or false.".into());
         }
-        "window_list" | "display_mode" | "panel_edge" | "shell_mode" | "watchdog" | "claim_win_key" => {}
+        "backend" if !matches!(value.as_str(), Some("direct2d" | "slint")) => {
+            return Err("backend must be direct2d or slint.".into());
+        }
+        "slint_renderer" if !matches!(value.as_str(), Some("skia" | "vello" | "software")) => {
+            return Err("slint_renderer must be skia, vello or software.".into());
+        }
+        "window_list" | "display_mode" | "panel_edge" | "shell_mode" | "watchdog" | "claim_win_key" | "backend"
+        | "slint_renderer" => {}
         _ => return Err(format!("Unknown setting: {key}")),
     }
     Ok(())

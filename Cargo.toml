@@ -1,6 +1,6 @@
 [package]
 name = "leanshell"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 description = "A Windows 11 shell, dock, and launcher replacement with ~0% idle resource use"
 license = "MIT"
@@ -16,6 +16,7 @@ members = [
     "platform-win",
     "render",
     "ui-d2d",
+    "ui-slint",
     "settings",
 ]
 
@@ -24,12 +25,15 @@ members = [
 nightly = []
 # Buffered QPC measurements and isolated capture scenarios; absent in shipping builds.
 perf-trace = ["windows/Win32_System_Performance"]
+# Optional Slint rendering backend.
+slint = ["dep:leanshell-ui-slint"]
 
 [dependencies]
 leanshell-core = { path = "core" }
 leanshell-platform-win = { path = "platform-win" }
 leanshell-render = { path = "render" }
 leanshell-ui-d2d = { path = "ui-d2d" }
+leanshell-ui-slint = { path = "ui-slint", optional = true }
 nucleo-matcher = "0.3"
 serde = { version = "1", features = ["derive"] }
 toml = "1"

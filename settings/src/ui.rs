@@ -60,6 +60,8 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
     window.set_theme_setting(config.theme.into());
     window.set_backdrop_setting(config.backdrop.into());
     window.set_position_setting(config.position.into());
+    window.set_backend_setting(config.backend.into());
+    window.set_slint_renderer_setting(config.slint_renderer.into());
     window.set_max_results(config.max_results as i32);
     window.set_show_recent(config.show_recent);
     window.set_search_url(config.search_url.into());
@@ -294,6 +296,36 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
                 "position",
                 val.as_str().into(),
                 |w, v| w.set_position_setting(v),
+                val,
+            );
+        });
+    }
+
+    {
+        let store = Arc::clone(&store);
+        let weak = window.as_weak();
+        window.on_backend_changed(move |val| {
+            apply_setting(
+                &store,
+                &weak,
+                "backend",
+                val.as_str().into(),
+                |w, v| w.set_backend_setting(v),
+                val,
+            );
+        });
+    }
+
+    {
+        let store = Arc::clone(&store);
+        let weak = window.as_weak();
+        window.on_slint_renderer_changed(move |val| {
+            apply_setting(
+                &store,
+                &weak,
+                "slint_renderer",
+                val.as_str().into(),
+                |w, v| w.set_slint_renderer_setting(v),
                 val,
             );
         });

@@ -1,0 +1,139 @@
+import { ScrollView, ListView } from "std-widgets.slint";
+
+export struct ResultRowData {
+    title: string,
+    subtitle: string,
+    badge: string,
+    selected: bool,
+}
+
+export component LauncherWindow inherits Window {
+    title: "LeanShell Launcher";
+    no_frame: true;
+    background: transparent;
+    default_font_family: "Segoe UI Variable Text, Segoe UI, sans-serif";
+
+    in_out property <string> search_text: "";
+    in_out property <string> placeholder_text: "Search apps and files, or try wifi, vol, time";
+    in_out property <string> chip_text: "";
+    in_out property <bool> has_chip: false;
+    in_out property <[ResultRowData]> results: [];
+    in_out property <int> selected_index: 0;
+
+    callback search_text_changed(string);
+    callback activate_result(int);
+
+    // Root container with rounded corners and border
+    Rectangle {
+        background: #1e1e1eeb;
+        border_radius: 12px;
+        border_width: 1px;
+        border_color: #ffffff1f;
+        clip: true;
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 6px;
+
+            // Search query bar
+            Rectangle {
+                height: 52px;
+                background: #2b2b2b80;
+                border_radius: 8px;
+                border_width: 1px;
+                border_color: #ffffff14;
+
+                HorizontalLayout {
+                    padding_left: 14px;
+                    padding_right: 14px;
+                    spacing: 8px;
+                    alignment: center;
+
+                    // Chip badge if active
+                    if has_chip: Rectangle {
+                        height: 26px;
+                        background: #0078d4;
+                        border_radius: 4px;
+                        HorizontalLayout {
+                            padding_left: 8px;
+                            padding_right: 8px;
+                            Text {
+                                text: chip_text;
+                                color: #ffffff;
+                                font_size: 12px;
+                                vertical_alignment: center;
+                            }
+                        }
+                    }
+
+                    // Input / query text
+                    Text {
+                        text: search_text == "" ? placeholder_text : search_text;
+                        color: search_text == "" ? #888888 : #ffffff;
+                        font_size: 18px;
+                        font_weight: 400;
+                        vertical_alignment: center;
+                        horizontal_alignment: left;
+                    }
+                }
+            }
+
+            // Results list
+            for row[index] in results: Rectangle {
+                height: 48px;
+                border_radius: 6px;
+                background: row.selected ? #ffffff1a : (touch.has_hover ? #ffffff0d : transparent);
+
+                touch := TouchArea {
+                    clicked => {
+                        root.activate_result(index);
+                    }
+                }
+
+                HorizontalLayout {
+                    padding_left: 12px;
+                    padding_right: 12px;
+                    spacing: 12px;
+                    alignment: center;
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        horizontal_stretch: 1;
+
+                        Text {
+                            text: row.title;
+                            color: #ffffff;
+                            font_size: 14px;
+                            font_weight: 500;
+                            overflow: elide;
+                        }
+
+                        if row.subtitle != "": Text {
+                            text: row.subtitle;
+                            color: #aaaaaa;
+                            font_size: 11px;
+                            overflow: elide;
+                        }
+                    }
+
+                    if row.badge != "": Rectangle {
+                        height: 20px;
+                        background: #333333;
+                        border_radius: 4px;
+                        HorizontalLayout {
+                            padding_left: 6px;
+                            padding_right: 6px;
+                            Text {
+                                text: row.badge;
+                                color: #888888;
+                                font_size: 11px;
+                                vertical_alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
