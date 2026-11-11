@@ -753,12 +753,14 @@ fn draw_status(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
     target
         .tray
         .retain(|key, _| frame.tray.iter().any(|shown| shown.icon.key() == *key));
-    separator(
-        target,
-        frame,
+    let sep_x = if let Some(pw) = frame.layout.panel_width {
+        let status_start = pw * frame.layout_scale - logic::status_width_scaled(parts, frame.layout_scale);
+        status_start + logic::separator_width(frame.layout_scale) / 2.0
+    } else {
         frame.layout.width(frame.layout_scale) - logic::pad(frame.layout_scale)
-            + logic::separator_width(frame.layout_scale) / 2.0,
-    );
+            + logic::separator_width(frame.layout_scale) / 2.0
+    };
+    separator(target, frame, sep_x);
     for &part in parts.iter() {
         let Some(left) = frame.layout.part_left(part, parts, frame.layout_scale) else {
             continue;

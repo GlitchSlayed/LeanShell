@@ -65,6 +65,7 @@ const REREGISTER_EVERY: u32 = 10;
 /// which takes about half a second, too long for the UI thread to wait.
 pub struct DockSpace {
     hwnd: HWND,
+    edge: u32,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -79,6 +80,7 @@ impl DockSpace {
         match started.recv() {
             Ok(Ok(hwnd)) => Ok(Self {
                 hwnd: HWND(hwnd as _),
+                edge,
                 thread: Some(thread),
             }),
             Ok(Err(code)) => {
@@ -90,6 +92,10 @@ impl DockSpace {
                 Err(Error::new(E_FAIL, "The dock space thread exited"))
             }
         }
+    }
+
+    pub fn edge(&self) -> u32 {
+        self.edge
     }
 
     /// Claims the space again if something gave it away, such as the taskbar

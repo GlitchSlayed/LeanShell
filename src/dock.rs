@@ -41,10 +41,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_INPUTSINK, RIDEV_REMOVE, RegisterRawInputDevices};
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{Error, GUID, Result, w};
+use windows::core::{Error, GUID, PCWSTR, Result, w};
 
 use crate::commands::open_windows::{self, Window};
-use crate::config::{Backdrop, WindowListMode};
+use crate::config::{Backdrop, DisplayMode, PanelEdge, WindowListMode};
 use crate::indexer::{AppEntry, IconPixels};
 use crate::theme::Palette;
 use crate::tray_host::{self, Action, TrayHost};
@@ -102,6 +102,8 @@ struct Item {
 struct State {
     hwnd: HWND,
     owner: HWND,
+    display_mode: DisplayMode,
+    panel_edge: PanelEdge,
     apps: Vec<AppEntry>,
     icons: HashMap<String, Arc<IconPixels>>,
     items: Vec<Item>,
@@ -212,6 +214,8 @@ impl Dock {
         let mut state = Box::new(RefCell::new(State {
             hwnd: HWND::default(),
             owner,
+            display_mode: DisplayMode::Dock,
+            panel_edge: PanelEdge::Bottom,
             apps: Vec::new(),
             icons: HashMap::new(),
             items: Vec::new(),
@@ -420,6 +424,28 @@ impl Dock {
 
     pub fn pace_frames(&mut self) {
         self.state.borrow_mut().frame_paced = true;
+    }
+
+    pub fn set_display_mode(&mut self, mode: DisplayMode) {
+        let mut s = self.state.borrow_mut();
+        if s.display_mode != mode {
+            s.display_mode = mode;
+            s.place();
+            unsafe {
+                let _ = InvalidateRect(Some(s.hwnd), None, false);
+            }
+        }
+    }
+
+    pub fn set_panel_edge(&mut self, edge: PanelEdge) {
+        let mut s = self.state.borrow_mut();
+        if s.panel_edge != edge {
+            s.panel_edge = edge;
+            s.place();
+            unsafe {
+                let _ = InvalidateRect(Some(s.hwnd), None, false);
+            }
+        }
     }
 
     /// Slides the dock in as the pointer would, and keeps it in, for captures.
@@ -889,9 +915,16 @@ impl State {
     }
 
     fn app_layout(&self) -> logic::AppLayout {
+        let panel_width = if self.display_mode == DisplayMode::Panel {
+            let scale = self.dpi as f32 / 96.0;
+            Some(self.width as f32 / scale)
+        } else {
+            None
+        };
         logic::AppLayout {
             count: self.count(),
             pinned: self.pinned.len().saturating_sub(self.scroll).min(self.count()),
+            panel_width,
         }
     }
 
@@ -1258,14 +1291,59 @@ impl State {
                 / logic::slot(layout_scale)) as usize)
                 .saturating_sub(1);
             self.scroll = self.scroll.min(self.items.len().saturating_sub(self.capacity));
-            let width = (self.app_layout().total_width(&parts, layout_scale) * scale).ceil() as i32;
             let height = (logic::height(layout_scale) * scale).round() as i32;
-            let x = info.rcMonitor.left + (info.rcMonitor.right - info.rcMonitor.left - width) / 2;
-            self.top = info.rcMonitor.bottom - height - (logic::margin(layout_scale) * scale).round() as i32;
-            self.left = x;
-            self.width = width;
-            let y = self.top + self.slide_offset(height);
-            crate::theme::shape(self.hwnd, width, height, 8.0 * layout_scale, self.dpi);
+            let margin = (logic::margin(layout_scale) * scale).round() as i32;
+            let (x, y, width, height, radius) = if self.display_mode == DisplayMode::Panel {
+                let mon_w = info.rcMonitor.right - info.rcMonitor.left;
+                let mon_h = info.rcMonitor.bottom - info.rcMonitor.top;
+                match self.panel_edge {
+                    PanelEdge::Top => {
+                        let w = mon_w - 2 * margin;
+                        let x = info.rcMonitor.left + margin;
+                        let y = info.rcMonitor.top + margin;
+                        self.top = y;
+                        self.left = x;
+                        self.width = w;
+                        (x, y, w, height, 6.0)
+                    }
+                    PanelEdge::Bottom => {
+                        let w = mon_w - 2 * margin;
+                        let x = info.rcMonitor.left + margin;
+                        let y = info.rcMonitor.bottom - height - margin;
+                        self.top = y;
+                        self.left = x;
+                        self.width = w;
+                        (x, y, w, height, 6.0)
+                    }
+                    PanelEdge::Left => {
+                        let h = mon_h - 2 * margin;
+                        let x = info.rcMonitor.left + margin;
+                        let y = info.rcMonitor.top + margin;
+                        self.top = y;
+                        self.left = x;
+                        self.width = height;
+                        (x, y, height, h, 6.0)
+                    }
+                    PanelEdge::Right => {
+                        let h = mon_h - 2 * margin;
+                        let x = info.rcMonitor.right - height - margin;
+                        let y = info.rcMonitor.top + margin;
+                        self.top = y;
+                        self.left = x;
+                        self.width = height;
+                        (x, y, height, h, 6.0)
+                    }
+                }
+            } else {
+                let width = (self.app_layout().total_width(&parts, layout_scale) * scale).ceil() as i32;
+                let x = info.rcMonitor.left + (info.rcMonitor.right - info.rcMonitor.left - width) / 2;
+                self.top = info.rcMonitor.bottom - height - margin;
+                self.left = x;
+                self.width = width;
+                let y = self.top + self.slide_offset(height);
+                (x, y, width, height, 8.0)
+            };
+            crate::theme::shape(self.hwnd, width, height, radius * layout_scale, self.dpi);
             let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), x, y, width, height, SWP_NOACTIVATE);
         }
         if previous != (self.dpi, self.left, self.top, self.width, self.scroll, self.capacity) {
@@ -1470,7 +1548,13 @@ impl State {
         let x = ((chevron.left + chevron.right - width) / 2)
             .min(monitor.right - margin - width)
             .max(monitor.left + margin);
-        let y = self.top - margin - height;
+        let layout_scale = logic::layout_scale(self.app_icon_size);
+        let dock_h = (logic::height(layout_scale) * scale).round() as i32;
+        let y = if self.panel_edge == PanelEdge::Top {
+            self.top + dock_h + margin
+        } else {
+            self.top - margin - height
+        };
         unsafe {
             let _ = SetWindowPos(self.flyout, Some(HWND_TOPMOST), x, y, width, height, SWP_NOACTIVATE);
             let _ = InvalidateRect(Some(self.flyout), None, false);
@@ -1680,7 +1764,11 @@ impl State {
         }
         let anchor = self.item_rect(slot);
         let gap = (6.0 * scale).round() as i32;
-        let available = anchor.top - gap - (info.rcWork.top + gap);
+        let available = if self.panel_edge == PanelEdge::Top {
+            info.rcWork.bottom - gap - (anchor.bottom + gap)
+        } else {
+            anchor.top - gap - (info.rcWork.top + gap)
+        };
         let capacity = logic::window_list_rows(available, scale, logic::LIST_PAD.1);
         if capacity == 0 {
             self.hide_windows();
@@ -1707,12 +1795,17 @@ impl State {
         self.windows_hover = self.windows_hover.filter(|&row| row < targets.len());
         self.windows_rows = rows;
         self.windows_targets = targets;
+        let y = if self.panel_edge == PanelEdge::Top {
+            anchor.bottom + gap
+        } else {
+            anchor.top - gap - height
+        };
         unsafe {
             let _ = SetWindowPos(
                 self.windows,
                 Some(HWND_TOPMOST),
                 x,
-                anchor.top - gap - height,
+                y,
                 width,
                 height,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
@@ -1781,13 +1874,18 @@ impl State {
         let x = ((anchor.left + anchor.right - width) / 2)
             .min(info.rcMonitor.right - gap - width)
             .max(info.rcMonitor.left + gap);
+        let y = if self.panel_edge == PanelEdge::Top {
+            anchor.bottom + gap
+        } else {
+            anchor.top - gap - height
+        };
         self.tip_text = text;
         unsafe {
             let _ = SetWindowPos(
                 self.tip,
                 Some(HWND_TOPMOST),
                 x,
-                anchor.top - gap - height,
+                y,
                 width,
                 height,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
@@ -1796,9 +1894,8 @@ impl State {
         }
     }
 
-    /// Offers the taskbar for icons the dock lacks, and Windows' settings
-    /// for which icons show in the dock.
-    fn chevron_menu(&mut self) {
+    /// Offers LeanShell settings, taskbar restoration, and Windows taskbar settings.
+    fn panel_menu(&mut self) {
         self.close_flyout();
         self.hide_tip();
         self.hide_windows();
@@ -1806,6 +1903,8 @@ impl State {
             let Ok(menu) = CreatePopupMenu() else {
                 return;
             };
+            let _ = AppendMenuW(menu, MF_STRING, 100, w!("LeanShell Settings"));
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, 1, w!("Show taskbar"));
             let _ = AppendMenuW(menu, MF_STRING, 2, w!("Taskbar settings"));
             let mut point = POINT::default();
@@ -1823,6 +1922,11 @@ impl State {
             .0;
             let _ = DestroyMenu(menu);
             match command {
+                100 => {
+                    if let Err(error) = crate::launch::settings(false) {
+                        eprintln!("Dock settings launch: {error}");
+                    }
+                }
                 1 => {
                     let _ = PostMessageW(Some(self.owner), WM_DOCK_SHOW_TASKBAR, WPARAM(0), LPARAM(0));
                 }
@@ -2362,9 +2466,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                                     eprintln!("Dock sound settings: {error}");
                                 }
                             }
-                            Some(logic::Part::Chevron) => s.chevron_menu(),
+                            Some(logic::Part::Chevron) => s.panel_menu(),
                             Some(logic::Part::Tray(position)) => s.click_inline(position, Action::Menu),
-                            _ => {}
+                            _ => s.panel_menu(),
                         }
                     }
                     return LRESULT(0);

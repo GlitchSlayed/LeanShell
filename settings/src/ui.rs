@@ -11,12 +11,17 @@ fn apply_setting<T: Clone>(
     update: impl FnOnce(&SettingsWindow, T),
     ui_val: T,
 ) {
-    if let Some(s) = store.as_ref()
-        && s.set(key, val).is_ok()
-    {
-        crate::system::notify_launcher();
-        if let Some(w) = weak.upgrade() {
-            update(&w, ui_val);
+    if let Some(s) = store.as_ref() {
+        match s.set(key, val) {
+            Ok(_) => {
+                crate::system::notify_launcher();
+                if let Some(w) = weak.upgrade() {
+                    update(&w, ui_val);
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to apply setting {key}: {e}");
+            }
         }
     }
 }

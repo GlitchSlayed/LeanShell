@@ -20,7 +20,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
 use crate::commands::{self, Command, Commands};
-use crate::config::{self, Config, DisplayMode, Position, Theme};
+use crate::config::{self, Config, DisplayMode, PanelEdge, Position, Theme};
 use crate::dock::space::DockSpace;
 use crate::dock::{self, Dock};
 use crate::drag::{self, Payload};
@@ -598,7 +598,8 @@ impl Launcher {
     /// to match the config.
     fn sync_shell(&mut self) {
         self.sync_taskbar();
-        if self.dock.as_ref().is_some_and(|d| d.shared() != self.bottom()) {
+        let should_share = self.config.display_mode == DisplayMode::Dock && self.bottom();
+        if self.dock.as_ref().is_some_and(|d| d.shared() != should_share) {
             self.dock = None;
         }
         if self.config.display_mode == DisplayMode::Center
@@ -609,7 +610,7 @@ impl Launcher {
             return;
         }
         if self.dock.is_none() {
-            match if self.bottom() {
+            match if should_share {
                 Dock::on_surface(self.hwnd)
             } else {
                 Dock::new(self.hwnd)
@@ -622,6 +623,8 @@ impl Launcher {
             }
         }
         if let Some(dock) = &mut self.dock {
+            dock.set_display_mode(self.config.display_mode);
+            dock.set_panel_edge(self.config.panel_edge);
             dock.pace_frames();
             dock.set_apps(&self.apps, &self.icons);
             dock.set_window_list_mode(self.config.window_list);
@@ -634,7 +637,11 @@ impl Launcher {
                 self.config.dock_autohide
             };
             dock.set_autohide(autohide);
-            if self.visible { dock.hide() } else { dock.show() }
+            if self.visible && should_share {
+                dock.hide()
+            } else {
+                dock.show()
+            }
         }
         self.sync_reserve();
     }
@@ -660,9 +667,17 @@ impl Launcher {
         if !wanted {
             self.dock_space = None;
         } else if let Some(space) = &self.dock_space {
-            // The taskbar hider may have just changed the work area.
-            space.set_thickness(reserved_thickness);
-            space.check();
+            if space.edge() != edge {
+                self.dock_space = None;
+                match DockSpace::new(reserved_thickness, edge) {
+                    Ok(space) => self.dock_space = Some(space),
+                    Err(e) => eprintln!("could not keep space for the panel: {e}"),
+                }
+            } else {
+                // The taskbar hider may have just changed the work area.
+                space.set_thickness(reserved_thickness);
+                space.check();
+            }
         } else {
             match DockSpace::new(reserved_thickness, edge) {
                 Ok(space) => self.dock_space = Some(space),
@@ -850,6 +865,7 @@ impl Launcher {
         // The launcher takes the dock's place while it is open.
         if let Some(dock) = &mut self.dock
             && !dock.shared()
+            && self.config.display_mode != DisplayMode::Panel
         {
             dock.hide();
         }
@@ -978,10 +994,13 @@ impl Launcher {
 
     /// The query box sits at the bottom of the screen and results stack upward.
     fn bottom(&self) -> bool {
-        self.config.display_mode != DisplayMode::Center
-            && (self.config.position == Position::Bottom
-                || self.config.display_mode == DisplayMode::Panel
-                || self.config.display_mode == DisplayMode::Dock)
+        if self.config.display_mode == DisplayMode::Center {
+            false
+        } else if self.config.display_mode == DisplayMode::Panel {
+            self.config.panel_edge == PanelEdge::Bottom && self.config.position == Position::Bottom
+        } else {
+            self.config.position == Position::Bottom
+        }
     }
 
     /// The launcher's height in DIPs.

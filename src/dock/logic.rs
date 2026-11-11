@@ -80,6 +80,7 @@ pub fn hit_scaled(x: f32, y: f32, running: usize, scale: f32) -> Option<usize> {
 pub struct AppLayout {
     pub count: usize,
     pub pinned: usize,
+    pub panel_width: Option<f32>,
 }
 
 impl AppLayout {
@@ -114,10 +115,33 @@ impl AppLayout {
         (0..=self.count).find(|&i| (self.left(i, scale)..self.left(i, scale) + slot(scale)).contains(&x))
     }
     pub fn part_left(self, part: Part, parts: &[Part], scale: f32) -> Option<f32> {
-        part_left_scaled(part, self.count, parts, scale).map(|x| x + self.gap() * scale)
+        if let Some(pw) = self.panel_width {
+            let index = parts.iter().position(|&p| p == part)?;
+            let offset: f32 = parts[..index].iter().map(|p| p.width_scaled(scale)).sum();
+            let status_start = pw * scale - status_width_scaled(parts, scale);
+            Some(status_start + separator_width(scale) + pad(scale) + offset)
+        } else {
+            part_left_scaled(part, self.count, parts, scale).map(|x| x + self.gap() * scale)
+        }
     }
     pub fn part_hit(self, x: f32, y: f32, parts: &[Part], scale: f32) -> Option<Part> {
-        part_hit_scaled(x - self.gap() * scale, y, self.count, parts, scale)
+        if let Some(pw) = self.panel_width {
+            let status_start = pw * scale - status_width_scaled(parts, scale);
+            if x < status_start || !(0.0..height(scale)).contains(&y) {
+                return None;
+            }
+            let mut left = status_start + separator_width(scale) + pad(scale);
+            for &part in parts {
+                let right = left + part.width_scaled(scale);
+                if (left..right).contains(&x) {
+                    return Some(part);
+                }
+                left = right;
+            }
+            None
+        } else {
+            part_hit_scaled(x - self.gap() * scale, y, self.count, parts, scale)
+        }
     }
 }
 
@@ -378,7 +402,11 @@ mod tests {
     fn pin_divider_geometry_and_hits_agree() {
         for scale in [0.75, 1.0, 1.25, 1.5, 2.0] {
             for (count, pinned) in [(0, 0), (3, 0), (3, 3), (3, 1), (3, 2)] {
-                let layout = AppLayout { count, pinned };
+                let layout = AppLayout {
+                    count,
+                    pinned,
+                    panel_width: None,
+                };
                 assert_eq!(layout.divider(), pinned > 0 && pinned < count);
                 let extra = if layout.divider() { SEPARATOR * scale } else { 0.0 };
                 let parts = parts(Some(2), true, true);
@@ -403,6 +431,16 @@ mod tests {
                 }
                 let clock = layout.part_left(Part::Clock, &parts, scale).unwrap();
                 assert_eq!(clock + (CLOCK_W + PAD) * scale, layout.total_width(&parts, scale));
+
+                let panel_layout = AppLayout {
+                    count,
+                    pinned,
+                    panel_width: Some(1920.0),
+                };
+                for part in &parts {
+                    let px = panel_layout.part_left(*part, &parts, scale).unwrap();
+                    assert_eq!(panel_layout.part_hit(px + 1.0, 10.0, &parts, scale), Some(*part));
+                }
             }
         }
     }
