@@ -2,7 +2,38 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
-## 0.0.7 - 2026-11-10
+## 0.0.8 - 2026-11-11
+
+### Comprehensive Architecture Stabilization & Audit Remediation (Findings 1-16)
+
+- **Work Package A: Recovery & Exclusive Ownership**:
+  - **Standalone Work Area Reservation (F01)**: In Exclusive Shell Mode when Windows Explorer is not running, LeanShell now directly calculates and commits screen work areas via Win32 `SystemParametersInfoW(SPI_SETWORKAREA, ...)`, guaranteeing maximized windows avoid the dock/panel without dependency on Explorer.
+  - **Fail-Closed Watchdog (F02)**: `TaskbarHider::start` now propagates watchdog initialization errors; if the watchdog process fails to arm, taskbar suppression immediately aborts and fails closed so the user is never stranded.
+  - **Emergency Explorer Handoff (F03)**: On shutdown or exit from an active Exclusive Shell session, LeanShell automatically spawns `explorer.exe` to guarantee the user is smoothly transitioned back to the default desktop.
+  - **Coordinated Multi-Step Recovery CLI (F04)**: Upgraded `--restore-shell` to signal active LeanShell instances via `WM_CLOSE`, clear taskbar window clipping regions, restore desktop work areas, transactionally restore HKCU Winlogon Shell, and launch Explorer if missing.
+  - **PowerShell Script Resilience (F05)**: Updated `scripts/restore-shell.ps1` to unclip window regions with `SetWindowRgn`, enumerate and unhide all secondary taskbars across multi-monitor setups, and verify Explorer shell status.
+
+- **Work Package B: Registration & Startup Semantics**:
+  - **Robust Startup Command-Line Parser (F06)**: Added a pure command-line parser in `core::startup_cmd` that separates target executables from flag arguments, properly handling quoted and unquoted Windows paths, initializing the COM apartment, and expanding `REG_EXPAND_SZ` environment variables.
+  - **RunOnce Completion Deferral (F07)**: Implemented standard Windows RunOnce semantics: ordinary entries delete before launch, while `!`-prefixed entries only delete upon verified successful completion.
+  - **Transactional Shell Registration (F08)**: Validates target executable existence on disk before modifying the registry, backs up existing shell settings to `HKCU\Software\LeanShell\BackupShell`, and restores custom prior shells on unregistration. Settings UI displays real-time diagnostics and rolls back on failure.
+  - **Session Ownership Detection (F09)**: Distinguishes between configured shell preference (`config.shell_mode`) and live session ownership (`GetShellWindow()`). Prevents duplicate desktop windows or re-dispatching startup apps when toggling settings in an active Explorer session, with session-scoped kernel event synchronization.
+
+- **Work Package C: Input, Layout, Rendering, and Task Behavior**:
+  - **Left/Right Vertical Panel Support (F10)**: Added full orientation awareness to `AppLayout` and Direct2D rendering. On `PanelEdge::Left` and `PanelEdge::Right`, the main axis is Y and cross axis is X: computes vertical slot bounds, centers icons horizontally, adjusts hit-testing to Y coordinates, and anchors tooltips/flyouts laterally.
+  - **Functional Direct2D Renderer Backend (F11)**: Implemented full Direct2D factory, HWND render target creation, paint, and DPI resize routines in `leanshell-ui-d2d` implementing `leanshell_render::Renderer`.
+  - **Unified Keyboard Hook State Machine (F12)**: Unified `platform-win/src/hook.rs` to directly use `core::hook::WinKeyTracker` on the hook thread, tracking pre-existing modifiers (Ctrl/Shift/Alt) to prevent chord misidentification.
+  - **Non-Blocking Window Activation (F14)**: Replaced blocking 600ms `thread::sleep` loops in `open_windows::focus` with non-blocking foreground attachment via `AttachThreadInput` and `BringWindowToTop`.
+  - **Responsive AppBar Forwarding (F15)**: Handled `dwData == 0` (`SHAppBarMessage`) locally within `Shell_TrayWnd` proxy in exclusive mode so external AppBar callers do not hang.
+
+- **Work Package D: Performance & Graceful Degradation**:
+  - **Zero-Wakeup Idle Raw Input Polling (F13)**: The hidden dock's 100ms polling timer is now killed when the pointer is resting, waking reactively on raw input movement to guarantee true ~0% idle CPU and 0 wakeups/sec.
+  - **Graceful Thread Spawn Degradation (F16)**: Replaced `.expect(...)` in `indexer.rs`, `files.rs`, and `commands/mod.rs` with graceful error logging, ensuring shell stability under system thread exhaustion.
+
+- **Cross-Cutting Roadmap Tracks**:
+  - **Native Shell Context Menu Integration (Track T3 & Track 3)**: Added `show_shell_context_menu` in `platform-win/src/shell_menu.rs`, querying `IShellItem` and binding to `IContextMenu` to render native OS context menus via `TrackPopupMenuEx`.
+  - **Offline Directory Fallback File Search (Track T2)**: Added direct user-folder directory scanning in `src/files.rs` as an instant local fallback when the Windows Search service (`WSearch`) is disabled or stopped.
+  - **Live Diagnostics CLI (Track T8)**: Added `--diagnose` CLI command in `src/taskbar.rs`, reporting live session ownership, registry shell and backup status, active shell window handles, and monitor work areas.
 
 ### Track 2: Standalone System Tray Host & Track 3: Enhanced Shell Context Menus
 

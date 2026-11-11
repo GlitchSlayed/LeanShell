@@ -68,14 +68,14 @@ impl FileSearch {
     pub fn spawn(hwnd: HWND, notify_msg: u32, results: Sender<FileResults>, icon_size: i32) -> FileSearch {
         let (requests, rx) = channel();
         let hwnd = hwnd.0 as isize;
-        std::thread::Builder::new()
-            .name("file search".into())
-            .spawn(move || {
-                worker(rx, results, icon_size, move || unsafe {
-                    let _ = PostMessageW(Some(HWND(hwnd as _)), notify_msg, WPARAM(0), LPARAM(0));
-                })
+        let spawned = std::thread::Builder::new().name("file search".into()).spawn(move || {
+            worker(rx, results, icon_size, move || unsafe {
+                let _ = PostMessageW(Some(HWND(hwnd as _)), notify_msg, WPARAM(0), LPARAM(0));
             })
-            .expect("could not start file search thread");
+        });
+        if let Err(e) = spawned {
+            eprintln!("Warning: could not start file search thread: {e}");
+        }
         FileSearch { requests }
     }
 
@@ -125,9 +125,9 @@ fn worker(requests: Receiver<Request>, results: Sender<FileResults>, icon_size: 
                 eprintln!("file search query failed: {e}");
                 // Reopen on the next query; the index service may have restarted.
                 index = None;
-                Vec::new()
+                fallback_scan(&request.query, &profile)
             }),
-            None => Vec::new(),
+            None => fallback_scan(&request.query, &profile),
         };
         let hits = rank(rows, &request, &profile, &mut matcher);
 
@@ -185,6 +185,37 @@ struct Row {
     name: String,
     path: String,
     is_folder: bool,
+}
+
+/// Fallback file search across standard user folders when Windows Search service is disabled or unavailable.
+fn fallback_scan(query: &str, profile: &str) -> Vec<Row> {
+    if query.is_empty() || profile.is_empty() {
+        return Vec::new();
+    }
+    let query_lower = query.to_lowercase();
+    let mut rows = Vec::new();
+    let profile_path = Path::new(profile);
+    for folder in USER_FOLDERS {
+        let dir = profile_path.join(folder);
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if let Ok(name) = entry.file_name().into_string()
+                    && name.to_lowercase().contains(&query_lower)
+                {
+                    let is_folder = entry.file_type().is_ok_and(|t| t.is_dir());
+                    rows.push(Row {
+                        path: entry.path().display().to_string(),
+                        name,
+                        is_folder,
+                    });
+                    if rows.len() >= CANDIDATES {
+                        return rows;
+                    }
+                }
+            }
+        }
+    }
+    rows
 }
 
 /// Drops noise, then orders by name match, user folders, path depth and recency.

@@ -140,14 +140,14 @@ impl Commands {
         let (requests, rx) = channel();
         let (events, events_rx) = channel();
         let hwnd = hwnd.0 as isize;
-        std::thread::Builder::new()
-            .name("commands".into())
-            .spawn(move || {
-                worker(rx, events, icon_size, move || unsafe {
-                    let _ = PostMessageW(Some(HWND(hwnd as _)), notify_msg, WPARAM(0), LPARAM(0));
-                })
+        let spawned = std::thread::Builder::new().name("commands".into()).spawn(move || {
+            worker(rx, events, icon_size, move || unsafe {
+                let _ = PostMessageW(Some(HWND(hwnd as _)), notify_msg, WPARAM(0), LPARAM(0));
             })
-            .expect("could not start commands thread");
+        });
+        if let Err(e) = spawned {
+            eprintln!("Warning: could not start commands thread: {e}");
+        }
         (Commands { requests }, events_rx)
     }
 

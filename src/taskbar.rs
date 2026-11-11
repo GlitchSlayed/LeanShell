@@ -559,7 +559,7 @@ impl TaskbarHider {
             return Err(failure("Primary taskbar was not found"));
         }
         let watchdog = if enable_watchdog {
-            Watchdog::start(&snapshot).ok()
+            Some(Watchdog::start(&snapshot)?)
         } else {
             None
         };
@@ -829,28 +829,30 @@ impl Drop for TaskbarHider {
 
 /// Command-line escape hatch to immediately restore the Windows taskbar and Explorer shell.
 pub fn restore_shell_cli() -> Result<()> {
-    println!("LeanShell: Restoring Windows Taskbar and Explorer Shell...");
+    println!("LeanShell: Coordinated recovery starting...");
 
-    // 1. Reset user Winlogon Shell override in HKCU
+    // 1. Signal any running LeanShell instance to close and release its hooks and appbars
     unsafe {
-        use windows::Win32::System::Registry::*;
-        let mut key = HKEY::default();
-        if RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            w!(r"Software\Microsoft\Windows NT\CurrentVersion\Winlogon"),
-            Some(0),
-            KEY_SET_VALUE | KEY_QUERY_VALUE,
-            &mut key,
-        )
-        .is_ok()
+        if let Ok(launcher) = FindWindowW(w!("Wisp.Launcher"), None)
+            && !launcher.is_invalid()
         {
-            let _ = RegDeleteValueW(key, w!("Shell"));
-            let _ = RegCloseKey(key);
-            println!("  [OK] Reset HKCU Winlogon Shell registry value.");
+            let _ = PostMessageW(Some(launcher), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+        if let Ok(dock) = FindWindowW(w!("Wisp.Dock"), None)
+            && !dock.is_invalid()
+        {
+            let _ = PostMessageW(Some(dock), WM_CLOSE, WPARAM(0), LPARAM(0));
         }
     }
 
-    // 2. Unclip and show all taskbars
+    // 2. Transactionally restore user Winlogon Shell override in HKCU
+    if let Err(e) = leanshell_platform_win::unregister_exclusive_shell() {
+        eprintln!("  [WARN] Failed to unregister exclusive shell: {e}");
+    } else {
+        println!("  [OK] Reverted HKCU Winlogon Shell override to default.");
+    }
+
+    // 3. Unclip and show all taskbars across all monitors
     if let Ok(all_bars) = bars() {
         for bar in all_bars {
             let hwnd = HWND(bar.hwnd as _);
@@ -862,18 +864,68 @@ pub fn restore_shell_cli() -> Result<()> {
         println!("  [OK] Unclipped and showed all taskbars.");
     }
 
-    // 3. Clear auto-hide on primary taskbar
+    // 4. Clear auto-hide on primary taskbar
     let _ = set_state(0);
 
-    // 4. Restore monitor work areas
+    // 5. Restore monitor work areas
     if let Ok(mons) = monitors() {
-        let areas: Vec<_> = mons.iter().map(|m| (m.bounds, m.bounds)).collect();
+        let areas: Vec<_> = mons.iter().map(|m| (m.bounds, m.work)).collect();
         let _ = restore_areas(&areas);
         println!("  [OK] Restored desktop work areas.");
     }
 
+    // 6. If Explorer is not running, start it
+    if crate::tray_host::explorer_tray().is_none() {
+        println!("  [INFO] Explorer shell not detected. Spawning explorer.exe...");
+        match std::process::Command::new("explorer.exe").spawn() {
+            Ok(_) => println!("  [OK] Spawned explorer.exe"),
+            Err(e) => eprintln!("  [ERR] Failed to spawn explorer.exe: {e}"),
+        }
+    }
+
     println!("[SUCCESS] Windows taskbar and Explorer shell restored successfully.");
     Ok(())
+}
+
+/// Prints live shell diagnostics (Track T8).
+pub fn print_diagnostics() {
+    println!("=== LeanShell System Diagnostics (Track T8) ===");
+    println!("Version: {}", env!("CARGO_PKG_VERSION"));
+
+    // 1. Session Ownership & Registration
+    let is_exclusive = leanshell_platform_win::is_session_exclusive();
+    println!("Live Session Exclusive (GetShellWindow owned): {}", is_exclusive);
+
+    let registered_shell = leanshell_platform_win::get_registered_shell();
+    println!("HKCU Winlogon Shell: {:?}", registered_shell);
+    let is_registered = leanshell_platform_win::is_exclusive_shell_registered();
+    println!("LeanShell Is Registered Shell: {}", is_registered);
+
+    let backup_shell = leanshell_platform_win::get_backup_shell();
+    println!("Backup Prior Shell: {:?}", backup_shell);
+
+    let safe_mode = leanshell_platform_win::is_safe_mode_requested();
+    println!("Safe Mode Requested (Shift Held): {}", safe_mode);
+
+    // 2. Active Window Handles
+    unsafe {
+        let shell_wnd = GetShellWindow();
+        println!("GetShellWindow(): {:?}", shell_wnd.0);
+        let tray = FindWindowW(w!("Shell_TrayWnd"), None);
+        println!("Shell_TrayWnd: {:?}", tray.map(|h| h.0));
+        let launcher = FindWindowW(w!("Wisp.Launcher"), None);
+        println!("LeanShell Launcher HWND: {:?}", launcher.map(|h| h.0));
+        let dock = FindWindowW(w!("Wisp.Dock"), None);
+        println!("LeanShell Dock HWND: {:?}", dock.map(|h| h.0));
+    }
+
+    // 3. Monitor Work Areas
+    if let Ok(mon_list) = monitors() {
+        for (i, m) in mon_list.iter().enumerate() {
+            println!("Monitor #{}: bounds={:?} work={:?}", i, m.bounds, m.work);
+        }
+    }
+    println!("================================================");
 }
 
 /// Dispatches CLI actions such as `--restore-shell` and `--taskbar-watchdog`.
@@ -900,6 +952,10 @@ pub fn dispatch_cli() -> bool {
         if let Err(e) = restore_shell_cli() {
             eprintln!("Failed to restore shell: {e}");
         }
+        return true;
+    }
+    if args.iter().any(|a| a == "--diagnose") {
+        print_diagnostics();
         return true;
     }
     if args.get(1).map(String::as_str) == Some("--taskbar-watchdog") {

@@ -4,6 +4,9 @@
 pub struct WinKeyTracker {
     win_down: bool,
     chord_detected: bool,
+    ctrl_down: bool,
+    shift_down: bool,
+    alt_down: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,9 +22,24 @@ impl WinKeyTracker {
 
     pub fn handle_key(&mut self, vk: u32, is_down: bool) -> HookDecision {
         let is_win = vk == 0x5B || vk == 0x5C; // VK_LWIN, VK_RWIN
+        let is_ctrl = vk == 0x11 || vk == 0xA2 || vk == 0xA3;
+        let is_shift = vk == 0x10 || vk == 0xA0 || vk == 0xA1;
+        let is_alt = vk == 0x12 || vk == 0xA4 || vk == 0xA5;
+
+        if is_ctrl {
+            self.ctrl_down = is_down;
+        }
+        if is_shift {
+            self.shift_down = is_down;
+        }
+        if is_alt {
+            self.alt_down = is_down;
+        }
+
         if is_win && is_down {
             self.win_down = true;
-            self.chord_detected = false;
+            // Pre-existing modifiers (e.g. Ctrl/Shift/Alt held before Win) mark this as a chord
+            self.chord_detected = self.ctrl_down || self.shift_down || self.alt_down;
             HookDecision::PassThrough
         } else if !is_win && is_down && self.win_down {
             self.chord_detected = true;
@@ -71,6 +89,26 @@ mod tests {
         // 'E' up
         assert_eq!(tracker.handle_key(0x45, false), HookDecision::PassThrough);
         // Win up -> PassThrough (NOT bare Win!)
+        assert_eq!(tracker.handle_key(0x5B, false), HookDecision::PassThrough);
+    }
+
+    #[test]
+    fn test_win_key_tracker_pre_existing_modifiers() {
+        let mut tracker = WinKeyTracker::new();
+        // Ctrl down first
+        assert_eq!(tracker.handle_key(0x11, true), HookDecision::PassThrough);
+        // Win down
+        assert_eq!(tracker.handle_key(0x5B, true), HookDecision::PassThrough);
+        // Win up -> must NOT claim bare Win because Ctrl was held!
+        assert_eq!(tracker.handle_key(0x5B, false), HookDecision::PassThrough);
+        // Ctrl up
+        assert_eq!(tracker.handle_key(0x11, false), HookDecision::PassThrough);
+
+        // Shift down first
+        assert_eq!(tracker.handle_key(0x10, true), HookDecision::PassThrough);
+        // Win down
+        assert_eq!(tracker.handle_key(0x5B, true), HookDecision::PassThrough);
+        // Win up -> PassThrough
         assert_eq!(tracker.handle_key(0x5B, false), HookDecision::PassThrough);
     }
 

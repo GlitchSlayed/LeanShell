@@ -454,20 +454,26 @@ fn rounded(rect: D2D_RECT_F, radius: f32) -> D2D1_ROUNDED_RECT {
 
 /// The rounded highlight behind a hovered or active slot or part.
 fn tile(target: &Target, frame: &Frame, left: f32, right: f32, color: &D2D1_COLOR_F) {
+    let r = if frame.layout.vertical {
+        frame.snap_rect(
+            TILE_TOP * frame.layout_scale,
+            left,
+            TILE_BOTTOM * frame.layout_scale,
+            right,
+        )
+    } else {
+        frame.snap_rect(
+            left,
+            TILE_TOP * frame.layout_scale,
+            right,
+            TILE_BOTTOM * frame.layout_scale,
+        )
+    };
     unsafe {
         target.brush.SetColor(color);
-        target.rt.FillRoundedRectangle(
-            &rounded(
-                frame.snap_rect(
-                    left,
-                    TILE_TOP * frame.layout_scale,
-                    right,
-                    TILE_BOTTOM * frame.layout_scale,
-                ),
-                TILE_RADIUS * frame.layout_scale,
-            ),
-            &target.brush,
-        );
+        target
+            .rt
+            .FillRoundedRectangle(&rounded(r, TILE_RADIUS * frame.layout_scale), &target.brush);
     }
 }
 
@@ -549,20 +555,27 @@ fn draw_flyout(target: &mut Target, frame: &FlyoutFrame) -> Result<()> {
     Ok(())
 }
 
-/// A one-pixel vertical rule at `x`, between the apps and the status.
-fn separator(target: &Target, frame: &Frame, x: f32) {
-    let x = frame.snap(x);
+/// A one-pixel vertical or horizontal rule at `pos`, between the apps and the status.
+fn separator(target: &Target, frame: &Frame, pos: f32) {
+    let p = frame.snap(pos);
+    let rect = if frame.layout.vertical {
+        frame.snap_rect(
+            17.0 * frame.layout_scale,
+            p,
+            39.0 * frame.layout_scale,
+            p + frame.hairline(),
+        )
+    } else {
+        frame.snap_rect(
+            p,
+            17.0 * frame.layout_scale,
+            p + frame.hairline(),
+            39.0 * frame.layout_scale,
+        )
+    };
     unsafe {
         target.brush.SetColor(&frame.palette.divider);
-        target.rt.FillRectangle(
-            &frame.snap_rect(
-                x,
-                17.0 * frame.layout_scale,
-                x + frame.hairline(),
-                39.0 * frame.layout_scale,
-            ),
-            &target.brush,
-        );
+        target.rt.FillRectangle(&rect, &target.brush);
     }
 }
 
@@ -590,7 +603,7 @@ unsafe fn draw(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
         let foreground = GetForegroundWindow().0 as isize;
         target.bitmaps.retain(|key, _| icons.contains_key(key));
         for index in 0..=running {
-            let x = frame.layout.left(index, frame.layout_scale);
+            let pos = frame.layout.left(index, frame.layout_scale);
             let slot = logic::slot(frame.layout_scale);
             let item = index.checked_sub(1).and_then(|i| items.get(i + scroll));
             let active = item.is_some_and(|item| item.windows.iter().any(|window| window.hwnd == foreground));
@@ -598,8 +611,8 @@ unsafe fn draw(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
                 tile(
                     target,
                     frame,
-                    x + 2.0 * frame.layout_scale,
-                    x + slot - 2.0 * frame.layout_scale,
+                    pos + 2.0 * frame.layout_scale,
+                    pos + slot - 2.0 * frame.layout_scale,
                     &p.tile,
                 );
             }
@@ -607,21 +620,31 @@ unsafe fn draw(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
                 tile(
                     target,
                     frame,
-                    x + 2.0 * frame.layout_scale,
-                    x + slot - 2.0 * frame.layout_scale,
+                    pos + 2.0 * frame.layout_scale,
+                    pos + slot - 2.0 * frame.layout_scale,
                     &p.row_selected,
                 );
             }
             let progress = frame.hover_levels.get(index).copied().unwrap_or(0.0);
             let lift = 2.0 * progress * progress * (3.0 - 2.0 * progress);
             let icon_size = *app_icon_size;
-            let icon_top = ICON_CENTER_Y * frame.layout_scale - icon_size / 2.0 - lift * frame.layout_scale;
-            let icon_rect = frame.snap_rect(
-                x + (slot - icon_size) / 2.0,
-                icon_top,
-                x + (slot + icon_size) / 2.0,
-                icon_top + icon_size,
-            );
+            let icon_rect = if frame.layout.vertical {
+                let icon_left = ICON_CENTER_Y * frame.layout_scale - icon_size / 2.0 - lift * frame.layout_scale;
+                frame.snap_rect(
+                    icon_left,
+                    pos + (slot - icon_size) / 2.0,
+                    icon_left + icon_size,
+                    pos + (slot + icon_size) / 2.0,
+                )
+            } else {
+                let icon_top = ICON_CENTER_Y * frame.layout_scale - icon_size / 2.0 - lift * frame.layout_scale;
+                frame.snap_rect(
+                    pos + (slot - icon_size) / 2.0,
+                    icon_top,
+                    pos + (slot + icon_size) / 2.0,
+                    icon_top + icon_size,
+                )
+            };
             let Some(item) = item else {
                 // A quiet search affordance leaves the accent to the running indicator.
                 target.brush.SetColor(&p.subtext);
@@ -682,22 +705,28 @@ unsafe fn draw(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
                     (true, true) => &[12.0, 3.0],
                 };
                 let total = marks.iter().sum::<f32>() + GAP * (marks.len() - 1) as f32;
-                let mut left = x + slot / 2.0 - total / 2.0 * frame.layout_scale;
+                let mut mark_pos = pos + slot / 2.0 - total / 2.0 * frame.layout_scale;
                 target.brush.SetColor(if active { &p.accent } else { &p.subtext });
-                for &width in marks {
-                    target.rt.FillRoundedRectangle(
-                        &rounded(
-                            frame.snap_rect(
-                                left,
-                                INDICATOR_TOP * frame.layout_scale,
-                                left + width * frame.layout_scale,
-                                (INDICATOR_TOP + 3.0) * frame.layout_scale,
-                            ),
-                            1.5 * frame.layout_scale,
-                        ),
-                        &target.brush,
-                    );
-                    left += (width + GAP) * frame.layout_scale;
+                for &mark_len in marks {
+                    let mark_rect = if frame.layout.vertical {
+                        frame.snap_rect(
+                            INDICATOR_TOP * frame.layout_scale,
+                            mark_pos,
+                            (INDICATOR_TOP + 3.0) * frame.layout_scale,
+                            mark_pos + mark_len * frame.layout_scale,
+                        )
+                    } else {
+                        frame.snap_rect(
+                            mark_pos,
+                            INDICATOR_TOP * frame.layout_scale,
+                            mark_pos + mark_len * frame.layout_scale,
+                            (INDICATOR_TOP + 3.0) * frame.layout_scale,
+                        )
+                    };
+                    target
+                        .rt
+                        .FillRoundedRectangle(&rounded(mark_rect, 1.5 * frame.layout_scale), &target.brush);
+                    mark_pos += (mark_len + GAP) * frame.layout_scale;
                 }
             }
         }
@@ -783,33 +812,65 @@ fn draw_status(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
                 unsafe { target.brush.SetColor(&p.text) };
                 // Up opens the flyout and down closes it, as on the taskbar.
                 let glyph = if frame.flyout_open { "\u{E70D}" } else { "\u{E70E}" };
-                let area = rect(
-                    left,
-                    TILE_TOP * frame.layout_scale,
-                    right,
-                    TILE_BOTTOM * frame.layout_scale,
-                );
+                let area = if frame.layout.vertical {
+                    rect(
+                        TILE_TOP * frame.layout_scale,
+                        left,
+                        TILE_BOTTOM * frame.layout_scale,
+                        right,
+                    )
+                } else {
+                    rect(
+                        left,
+                        TILE_TOP * frame.layout_scale,
+                        right,
+                        TILE_BOTTOM * frame.layout_scale,
+                    )
+                };
                 text(&target.rt, &target.brush, &formats.chevron, glyph, area);
                 continue;
             }
             Part::Tray(index) => {
                 if let Some(shown) = frame.inline.get(index).and_then(|&i| frame.tray.get(i)) {
-                    let middle = (TILE_TOP + TILE_BOTTOM) / 2.0 * frame.layout_scale;
-                    tray_icon(
-                        target,
-                        frame.dpi,
-                        shown,
-                        left + part.width_scaled(frame.layout_scale) / 2.0,
-                        middle,
-                    )?;
+                    let (cx, cy) = if frame.layout.vertical {
+                        (
+                            (TILE_TOP + TILE_BOTTOM) / 2.0 * frame.layout_scale,
+                            left + part.width_scaled(frame.layout_scale) / 2.0,
+                        )
+                    } else {
+                        (
+                            left + part.width_scaled(frame.layout_scale) / 2.0,
+                            (TILE_TOP + TILE_BOTTOM) / 2.0 * frame.layout_scale,
+                        )
+                    };
+                    tray_icon(target, frame.dpi, shown, cx, cy)?;
                 }
                 continue;
             }
             _ => {}
         }
         let (rt, brush) = (&target.rt, &target.brush);
-        let upper = rect(left, UPPER.0 * frame.layout_scale, right, UPPER.1 * frame.layout_scale);
-        let lower = rect(left, LOWER.0 * frame.layout_scale, right, LOWER.1 * frame.layout_scale);
+        let (upper, lower) = if frame.layout.vertical {
+            (
+                rect(
+                    TILE_TOP * frame.layout_scale,
+                    left,
+                    TILE_BOTTOM * frame.layout_scale,
+                    (left + right) / 2.0,
+                ),
+                rect(
+                    TILE_TOP * frame.layout_scale,
+                    (left + right) / 2.0,
+                    TILE_BOTTOM * frame.layout_scale,
+                    right,
+                ),
+            )
+        } else {
+            (
+                rect(left, UPPER.0 * frame.layout_scale, right, UPPER.1 * frame.layout_scale),
+                rect(left, LOWER.0 * frame.layout_scale, right, LOWER.1 * frame.layout_scale),
+            )
+        };
         unsafe {
             match part {
                 Part::Volume => {

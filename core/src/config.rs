@@ -75,6 +75,12 @@ pub enum PanelEdge {
     Right,
 }
 
+impl PanelEdge {
+    pub fn is_vertical(self) -> bool {
+        matches!(self, PanelEdge::Left | PanelEdge::Right)
+    }
+}
+
 /// Horizontal alignment of search and app icons in panel mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]

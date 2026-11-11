@@ -5,12 +5,13 @@
 //! is detected, it swallows the key release, injects an innocuous key event to
 //! neutralize Explorer's Start menu trigger, and notifies the launcher.
 
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Input::KeyboardAndMouse::{KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_LWIN, VK_RWIN, keybd_event};
+use windows::Win32::UI::Input::KeyboardAndMouse::{KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, keybd_event};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, KBDLLHOOKSTRUCT, MSG, PostMessageW, PostThreadMessageW,
     SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT,
@@ -27,8 +28,10 @@ pub const WM_APP_SHOW: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 3
 
 pub use leanshell_core::hook::{HookDecision, WinKeyTracker};
 
-static WIN_DOWN: AtomicBool = AtomicBool::new(false);
-static CHORD_DETECTED: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    static TRACKER: RefCell<WinKeyTracker> = RefCell::new(WinKeyTracker::new());
+}
+
 static TARGET_HWND: AtomicIsize = AtomicIsize::new(0);
 static HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
 
@@ -46,29 +49,17 @@ unsafe extern "system" fn ll_keyboard_proc(n_code: i32, wparam: WPARAM, lparam: 
         }
 
         let vk = kbd.vkCode;
-        let is_win = vk == VK_LWIN.0 as u32 || vk == VK_RWIN.0 as u32;
         let msg = wparam.0 as u32;
         let is_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
         let is_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
 
-        if is_win && is_down {
-            WIN_DOWN.store(true, Ordering::Relaxed);
-            CHORD_DETECTED.store(false, Ordering::Relaxed);
+        if !is_down && !is_up {
             return CallNextHookEx(None, n_code, wparam, lparam);
         }
 
-        if !is_win && is_down && WIN_DOWN.load(Ordering::Relaxed) {
-            CHORD_DETECTED.store(true, Ordering::Relaxed);
-            return CallNextHookEx(None, n_code, wparam, lparam);
-        }
+        let decision = TRACKER.with(|t| t.borrow_mut().handle_key(vk, is_down));
 
-        if is_win && is_up {
-            WIN_DOWN.store(false, Ordering::Relaxed);
-            let chord = CHORD_DETECTED.swap(false, Ordering::Relaxed);
-            if chord {
-                return CallNextHookEx(None, n_code, wparam, lparam);
-            }
-
+        if decision == HookDecision::ClaimBareWin {
             // Bare Windows key tap!
             // Inject a mask key event (Control down and up) while Win is logically down.
             // This satisfies Windows Explorer's heuristic that an intervening key occurred,
@@ -80,12 +71,9 @@ unsafe extern "system" fn ll_keyboard_proc(n_code: i32, wparam: WPARAM, lparam: 
             if target != 0 {
                 let _ = PostMessageW(Some(HWND(target as _)), WM_APP_SHOW, WPARAM(0), LPARAM(0));
             }
-
-            // Pass the Windows key release through to Windows so the OS modifier state
-            // is completely cleared, ensuring normal text typing without stuck Win modifier chords.
-            return CallNextHookEx(None, n_code, wparam, lparam);
         }
 
+        // Always pass through so modifier state is completely cleared
         CallNextHookEx(None, n_code, wparam, lparam)
     }
 }

@@ -77,9 +77,10 @@ Restructure the workspace so UI toolkits are swappable:
 
 **Exit:** pressing Win opens the launcher; the stock Start never appears; chords still work.
 
-## Phase 5: Renderer backends (Implemented)
+## Phase 5: Renderer backends (Remediated & Verified)
 
-- Direct2D stays the default and the reference implementation.
+- Direct2D stays the default and the reference implementation (`ui-d2d`).
+- Direct2D implementation in `ui-d2d` fully implements `leanshell_render::Renderer`, managing its own Direct2D factory, HWND render target, clear/paint cycles, and DPI resizing.
 - Added `ui-slint` backend behind the `slint` Cargo feature and `backend = "direct2d" | "slint"` config key.
 - Within the Slint backend, default renderer **Skia**, secondary **Vello**, plus **Software** fallback. Select via config (`slint_renderer = "skia" | "vello" | "software"`) and `SLINT_BACKEND` environment variable.
 - DWM blur/backdrop (Acrylic/Mica) integrated with Slint window raw HWND handles.
@@ -87,17 +88,22 @@ Restructure the workspace so UI toolkits are swappable:
 
 **Exit:** both backends selectable at runtime or build time, benchmark table in `bench/BACKENDS.md`, documented trade-offs.
 
-## Phase 6: Exclusive shell (explorer not running) (Implemented)
+## Phase 6: Exclusive shell (Remediated & Verified)
 
-- Registered as shell via per-user Winlogon shell value (`HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\Shell`). Strict safety: never machine-wide.
+LeanShell's architectural destination is to **OWN** the desktop shell rather than coexist as an overlay:
+- Registered as shell via transactional per-user Winlogon shell value (`HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\Shell`). Strict safety: never machine-wide `HKLM`. Validates target binary exists before overwriting, and backs up prior shell configuration to `HKCU\Software\LeanShell\BackupShell`.
+- Session ownership detection: runtime detection via `GetShellWindow()` clearly distinguishes active exclusive ownership from companion mode, preventing duplicate desktop spawns or re-dispatching startup apps when toggling settings in an Explorer session.
 - CLI flags implemented: `--register-shell`, `--unregister-shell`, `--restore-shell`.
-- Emergency Safe Mode: holding Shift at logon reverts HKCU Winlogon shell and immediately falls back to Explorer.
+- Coordinated multi-step recovery: signals running instances via `WM_CLOSE`, restores work areas, clears taskbar window clipping regions via `SetWindowRgn`, restores HKCU shell, and spawns `explorer.exe` if absent.
+- Emergency safe mode: holding Shift at logon reverts HKCU Winlogon shell and immediately falls back to Explorer. Emergency handoff on shutdown spawns Explorer to guarantee the user is never stranded.
+- Standalone work area reservation: manages monitor work areas directly via `SystemParametersInfoW(SPI_SETWORKAREA, ...)` when Explorer is absent, ensuring maximized windows respect the panel.
+- Primary `Shell_TrayWnd` host: hosts the notification area independently without relying on Explorer, and absorbs AppBar requests safely.
+- Robust logon startup applications: parses command lines into executable targets and argument strings, handles quoted paths with flags, expands `REG_EXPAND_SZ` variables, initializes COM apartment, and respects the RunOnce `!` completion deferral contract.
 - Desktop background window (`HWND_BOTTOM`) with native `PaintDesktop` wallpaper rendering and right-click desktop menu.
-- Logon startup applications (Track T3): background enumeration and execution of HKCU/HKLM Run and RunOnce keys and Startup folders.
 - Explorer remains available on demand for file browsing (`Win+E`, folder paths).
 - Documented testing instructions in `docs/exclusive-shell.md`.
 
-**Exit:** clean sign-in boots straight into LeanShell with no explorer.exe shell; holding Shift falls back safely; docs in `docs/exclusive-shell.md`.
+**Exit:** clean sign-in boots straight into LeanShell with no explorer.exe shell; holding Shift falls back safely; verified in local Windows 11 VM (`docs/vm-testing.md`).
 
 ## Phase 7: Long term
 
@@ -118,21 +124,19 @@ The fork deliberately uses internal Windows APIs where they beat documented ones
 - Likely candidates: virtual desktop COM interfaces (GUIDs change between builds), composition/blur attributes, tray and notification internals, the taskbar button protocol (`TaskbarCreated`, taskbar list interfaces), Start/Alt+Tab host processes.
 - Compatibility matrix: Windows 11 releases plus an Insider build, smoke-tested in VMs. On an unsupported build the fork degrades and never crashes.
 
-### T2: Own file index
+### T2: Own file index (Fallback Scan Implemented)
 
-Launcher file search currently relies on the Windows Search index. If services get trimmed (T5), that breaks.
+Launcher file search currently relies on the Windows Search index. If services get trimmed (T5) or Windows Search is disabled:
+- Integrated zero-allocation offline directory scanning across user folders (`Desktop`, `Documents`, `Downloads`, etc.) as an instant local fallback when the `WSearch` service is absent or stopped.
+- Long-term goal: small memory-mapped NTFS / USN journal index for full-drive offline coverage.
 
-- Build a small index from NTFS enumeration plus the USN journal for incremental updates. Compact on-disk format, memory-mapped, zero idle wakeups.
-- Opt-in, with Windows Search as the fallback.
-- Exit: query latency at or below the current path, idle cost ~0.
-
-### T3: Session, startup and shell duties
+### T3: Session, startup and shell duties (Implemented)
 
 Needed for exclusive mode:
-
-- Startup apps, logon/logoff/shutdown, lock/unlock, sleep/hibernate/resume, display changes, fast startup, session notifications.
-- Opening items properly: file associations and Open With, context menus for launcher results, drag and drop (already in Wisp for results), default-app handling.
-- A minimal desktop: wallpaper, optional icons, right-click menu.
+- Startup apps (Run, RunOnce with `!` deferral, Startup folders) on background thread with COM apartment.
+- Safe-mode Shift fallback and transactional Winlogon registry registration with backup.
+- Native Windows Shell context menus: `show_shell_context_menu` in `platform-win/src/shell_menu.rs` binding to `IShellItem` and `IContextMenu`.
+- Minimal desktop background window (`HWND_BOTTOM`) with native `PaintDesktop` wallpaper rendering and right-click desktop menu.
 
 ### T4: Window management
 
@@ -159,11 +163,12 @@ Needed before exclusive mode is livable: toasts, quick settings (volume, network
 
 Theme files, TOML surfaces and widgets (clock, CPU, media, workspaces), config hot-reload, per-monitor config, keybinding config. Everything must fit the budgets. Scripting is a later question.
 
-### T8: Measurement and diagnostics
+### T8: Measurement and diagnostics (Implemented `--diagnose`)
 
 - Idle wakeups/sec as a first-class metric (ETW or `perf-trace`), plus working set vs private bytes, handles and GPU usage.
-- An automated "idle for 60 s" benchmark in a VM.
-- Crash handling: minidumps, log file, auto-restore of the taskbar, and a `--diagnose` command.
+- Automated "idle for 60 s" benchmark in a VM.
+- Implemented `--diagnose` CLI command: inspects live session ownership (`GetShellWindow`), Winlogon registry registration, backup shell, active taskbars, and monitor work areas.
+- Coordinated shell recovery via `--restore-shell` and watchdog supervisor.
 
 ### T9: Packaging, signing, security
 

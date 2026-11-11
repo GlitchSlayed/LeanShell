@@ -44,14 +44,14 @@ impl Indexer {
     pub fn spawn(hwnd: HWND, notify_msg: u32, events: Sender<IndexEvent>, icon_size: i32) -> Indexer {
         let (requests, rx) = channel();
         let hwnd = hwnd.0 as isize;
-        std::thread::Builder::new()
-            .name("indexer".into())
-            .spawn(move || {
-                worker(rx, events, icon_size, move || unsafe {
-                    let _ = PostMessageW(Some(HWND(hwnd as _)), notify_msg, WPARAM(0), LPARAM(0));
-                })
+        let spawned = std::thread::Builder::new().name("indexer".into()).spawn(move || {
+            worker(rx, events, icon_size, move || unsafe {
+                let _ = PostMessageW(Some(HWND(hwnd as _)), notify_msg, WPARAM(0), LPARAM(0));
             })
-            .expect("could not start app indexing thread");
+        });
+        if let Err(e) = spawned {
+            eprintln!("Warning: could not start app indexing thread: {e}");
+        }
         Indexer { requests }
     }
 

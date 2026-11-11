@@ -11,6 +11,7 @@ pub mod history;
 pub mod hook;
 pub mod model;
 pub mod search;
+pub mod startup_cmd;
 
 pub use calc::{evaluate as eval_calc, format as format_calc};
 pub use command::{MediaControl, PowerAction, SystemCommand};

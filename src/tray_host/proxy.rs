@@ -790,7 +790,17 @@ fn on_copy_data(wp: WPARAM, lp: LPARAM) -> LRESULT {
             }
             forward_copy(wp, data.dwData, &bytes)
         }
-        // Appbar messages and anything unknown pass through unchanged.
+        // SHAppBarMessage (dwData == 0): when running exclusively without Explorer,
+        // acknowledge and succeed locally so calling apps do not hang or fail.
+        0 => {
+            let tray = HWND(EXPLORER.with(Cell::get) as _);
+            if tray.is_invalid() {
+                LRESULT(1)
+            } else {
+                forward_copy(wp, data.dwData, &bytes)
+            }
+        }
+        // Other messages pass through unchanged.
         _ => forward_copy(wp, data.dwData, &bytes),
     }
 }
@@ -818,6 +828,10 @@ fn forward_other(msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         || (WM_USER..0xC000).contains(&msg);
     let tray = HWND(EXPLORER.with(Cell::get) as _);
     if !shell || tray.is_invalid() {
+        if shell && tray.is_invalid() {
+            // Acknowledge shell command in exclusive mode without Explorer
+            return Some(LRESULT(0));
+        }
         return None;
     }
     unsafe {

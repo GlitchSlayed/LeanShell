@@ -155,6 +155,7 @@ unsafe extern "system" fn desktop_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
                         }
                         IDM_RESTORE => {
                             let _ = crate::taskbar::restore_shell_cli();
+                            std::process::exit(0);
                         }
                         _ => {}
                     }

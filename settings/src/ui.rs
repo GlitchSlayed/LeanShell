@@ -136,22 +136,64 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
         let store = Arc::clone(&store);
         let weak = window.as_weak();
         window.on_shell_mode_changed(move |val| {
+            let previous = store
+                .as_ref()
+                .as_ref()
+                .and_then(|s| s.load().ok())
+                .map(|c| c.shell_mode)
+                .unwrap_or_else(|| "companion".into());
+
             if val == "exclusive" {
-                if let Ok(exe) = std::env::current_exe() {
-                    let main_exe = exe.with_file_name("leanshell.exe");
-                    let _ = leanshell_platform_win::register_exclusive_shell(&main_exe);
+                let main_exe = std::env::current_exe()
+                    .ok()
+                    .map(|exe| exe.with_file_name("leanshell.exe"));
+
+                let Some(main_exe) = main_exe.filter(|p| p.exists()) else {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_shell_mode(previous.into());
+                        w.set_status_message("Cannot register: leanshell.exe not found".into());
+                    }
+                    return;
+                };
+
+                if let Err(e) = leanshell_platform_win::register_exclusive_shell(&main_exe) {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_shell_mode(previous.into());
+                        w.set_status_message(format!("Registry error: {e}").into());
+                    }
+                    return;
                 }
-            } else if val == "companion" {
-                let _ = leanshell_platform_win::unregister_exclusive_shell();
+            } else if val == "companion"
+                && let Err(e) = leanshell_platform_win::unregister_exclusive_shell()
+            {
+                if let Some(w) = weak.upgrade() {
+                    w.set_shell_mode(previous.into());
+                    w.set_status_message(format!("Registry error: {e}").into());
+                }
+                return;
             }
-            apply_setting(
-                &store,
-                &weak,
-                "shell_mode",
-                val.as_str().into(),
-                |w, v| w.set_shell_mode(v),
-                val,
-            );
+
+            if let Some(s) = store.as_ref() {
+                match s.set("shell_mode", val.as_str().into()) {
+                    Ok(_) => {
+                        crate::system::notify_launcher();
+                        if let Some(w) = weak.upgrade() {
+                            w.set_shell_mode(val);
+                            w.set_status_message("Saved. Takes effect on next logon.".into());
+                        }
+                    }
+                    Err(e) => {
+                        // Rollback registry change
+                        if val == "exclusive" {
+                            let _ = leanshell_platform_win::unregister_exclusive_shell();
+                        }
+                        if let Some(w) = weak.upgrade() {
+                            w.set_shell_mode(previous.into());
+                            w.set_status_message(format!("Config error: {e}").into());
+                        }
+                    }
+                }
+            }
         });
     }
 

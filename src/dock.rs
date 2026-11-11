@@ -162,6 +162,7 @@ struct State {
     /// The dock's left edge on screen, in physical pixels.
     left: i32,
     width: i32,
+    height: i32,
     surface_rect: Option<RECT>,
     /// Hosts the notification area while the taskbar is hidden.
     tray_host: Option<TrayHost>,
@@ -260,6 +261,7 @@ impl Dock {
             desktop_pill: None,
             left: 0,
             width: 0,
+            height: 0,
             surface_rect: None,
             tray_host: None,
             tray: Vec::new(),
@@ -928,9 +930,11 @@ impl State {
     }
 
     fn app_layout(&self) -> logic::AppLayout {
+        let is_vert = self.panel_edge.is_vertical();
         let panel_width = if self.display_mode == DisplayMode::Panel {
             let scale = self.dpi as f32 / 96.0;
-            Some(self.width as f32 / scale)
+            let span = if is_vert { self.height } else { self.width };
+            Some(span as f32 / scale)
         } else {
             None
         };
@@ -939,6 +943,7 @@ impl State {
             pinned: self.pinned.len().saturating_sub(self.scroll).min(self.count()),
             panel_width,
             center_apps: self.display_mode == DisplayMode::Panel && self.panel_align == PanelAlign::Center,
+            vertical: is_vert,
         }
     }
 
@@ -974,41 +979,56 @@ impl State {
                 }
                 return;
             }
-            // Dragging along the bottom edge, such as a scroll bar, is not a request for the dock.
+            // Dragging along the edge, such as a scroll bar, is not a request for the dock.
             let dragging =
                 unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 || GetAsyncKeyState(VK_RBUTTON.0 as i32) < 0 };
             let moved = cursor != self.last_cursor;
             self.last_cursor = cursor;
             let monitor = cursor_monitor(cursor);
-            let at_edge = monitor.is_some_and(|m| cursor.y >= m.bottom - 2);
-            let near_edge = monitor.is_some_and(|m| cursor.y >= m.bottom - (m.bottom - m.top) / 3);
+            let at_edge = monitor.is_some_and(|m| match self.panel_edge {
+                PanelEdge::Top => cursor.y <= m.top + 2,
+                PanelEdge::Bottom => cursor.y >= m.bottom - 2,
+                PanelEdge::Left => cursor.x <= m.left + 2,
+                PanelEdge::Right => cursor.x >= m.right - 2,
+            });
+            let near_edge = monitor.is_some_and(|m| match self.panel_edge {
+                PanelEdge::Top => cursor.y <= m.top + (m.bottom - m.top) / 3,
+                PanelEdge::Bottom => cursor.y >= m.bottom - (m.bottom - m.top) / 3,
+                PanelEdge::Left => cursor.x <= m.left + (m.right - m.left) / 3,
+                PanelEdge::Right => cursor.x >= m.right - (m.right - m.left) / 3,
+            });
             if !dragging && at_edge && !fullscreen_foreground(self.hwnd) {
                 self.listen(false);
                 self.reveal();
                 self.start_poll(POLL_MS);
             } else if !near_edge {
-                // Away from the edge, the slow poll is enough.
-                self.listen(false);
+                // Away from edge: once resting, register raw input and stop timer to maintain ~0% idle CPU.
+                self.still_polls += 1;
+                if self.still_polls >= STILL_POLLS && !fullscreen_foreground(self.hwnd) {
+                    self.listen(true);
+                    if self.listening {
+                        self.stop_poll();
+                        return;
+                    }
+                }
                 self.set_poll(POLL_MS);
             } else if moved {
-                // Over a full-screen app, the slow poll is enough. The check
-                // runs only when the pointer starts to move, so a resting
-                // pointer costs no more than before.
+                // Near edge and pointer moving: track with fast poll.
                 self.still_polls = 0;
                 self.listen(false);
                 let fast = self.poll_ms == NEAR_POLL_MS || !fullscreen_foreground(self.hwnd);
                 self.set_poll(if fast { NEAR_POLL_MS } else { POLL_MS });
-            } else if self.still_polls < STILL_POLLS {
-                // A resting pointer can't reach the edge. Poll slowly until it
-                // moves again, and let Windows report that movement unless a
-                // full-screen app is in front. Checked once per rest.
+            } else {
+                // Near edge but resting: listen for movement and stop polling.
                 self.still_polls += 1;
-                if self.still_polls == STILL_POLLS {
-                    if !fullscreen_foreground(self.hwnd) {
-                        self.listen(true);
+                if self.still_polls >= STILL_POLLS && !fullscreen_foreground(self.hwnd) {
+                    self.listen(true);
+                    if self.listening {
+                        self.stop_poll();
+                        return;
                     }
-                    self.set_poll(POLL_MS);
                 }
+                self.set_poll(POLL_MS);
             }
             return;
         }
@@ -1074,6 +1094,14 @@ impl State {
         }
     }
 
+    /// Stops the poll timer when idle.
+    fn stop_poll(&mut self) {
+        self.poll_ms = 0;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), POLL_TIMER);
+        }
+    }
+
     /// Changes the poll timer to `ms` unless it already runs at that interval.
     fn set_poll(&mut self, ms: u32) {
         if ms != self.poll_ms {
@@ -1108,6 +1136,7 @@ impl State {
             self.listen(false);
             self.still_polls = 0;
             self.start_poll(NEAR_POLL_MS);
+            self.poll();
         }
     }
 
@@ -1231,7 +1260,15 @@ impl State {
     }
 
     fn place(&mut self) {
-        let previous = (self.dpi, self.left, self.top, self.width, self.scroll, self.capacity);
+        let previous = (
+            self.dpi,
+            self.left,
+            self.top,
+            self.width,
+            self.height,
+            self.scroll,
+            self.capacity,
+        );
         if self.suspended {
             return;
         }
@@ -1318,6 +1355,7 @@ impl State {
                         self.top = y;
                         self.left = x;
                         self.width = w;
+                        self.height = height;
                         (x, y, w, height, 6.0)
                     }
                     PanelEdge::Bottom => {
@@ -1327,6 +1365,7 @@ impl State {
                         self.top = y;
                         self.left = x;
                         self.width = w;
+                        self.height = height;
                         (x, y, w, height, 6.0)
                     }
                     PanelEdge::Left => {
@@ -1336,6 +1375,7 @@ impl State {
                         self.top = y;
                         self.left = x;
                         self.width = height;
+                        self.height = h;
                         (x, y, height, h, 6.0)
                     }
                     PanelEdge::Right => {
@@ -1345,6 +1385,7 @@ impl State {
                         self.top = y;
                         self.left = x;
                         self.width = height;
+                        self.height = h;
                         (x, y, height, h, 6.0)
                     }
                 }
@@ -1354,13 +1395,24 @@ impl State {
                 self.top = info.rcMonitor.bottom - height - margin;
                 self.left = x;
                 self.width = width;
+                self.height = height;
                 let y = self.top + self.slide_offset(height);
                 (x, y, width, height, 8.0)
             };
             crate::theme::shape(self.hwnd, width, height, radius * layout_scale, self.dpi);
             let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), x, y, width, height, SWP_NOACTIVATE);
         }
-        if previous != (self.dpi, self.left, self.top, self.width, self.scroll, self.capacity) {
+        if previous
+            != (
+                self.dpi,
+                self.left,
+                self.top,
+                self.width,
+                self.height,
+                self.scroll,
+                self.capacity,
+            )
+        {
             self.hide_windows();
         }
         // The chevron and icons move whenever the dock's width changes.
@@ -1381,48 +1433,78 @@ impl State {
     /// A part's rectangle on screen where the dock rests, in physical pixels.
     fn part_rect(&self, part: logic::Part) -> Option<RECT> {
         let scale = self.dpi as f32 / 96.0;
-        let left = self
+        let main_pos = self
             .app_layout()
             .part_left(part, &self.parts(), logic::layout_scale(self.app_icon_size))?;
         let px = |dip: f32| (dip * scale).round() as i32;
-        let rect = self.surface_rect;
-        let x = |dip| match rect {
-            Some(rect) => {
-                rect.left + (px(dip) as f32 * (rect.right - rect.left) as f32 / self.width.max(1) as f32).round() as i32
-            }
-            None => self.left + px(dip),
-        };
         let layout_scale = logic::layout_scale(self.app_icon_size);
-        let height = logic::height(layout_scale);
-        let top = rect.map_or(self.top + self.slide_offset(px(height)), |r| r.bottom - px(height));
-        Some(RECT {
-            left: x(left),
-            top,
-            right: x(left + part.width_scaled(layout_scale)),
-            bottom: top + px(height),
-        })
+        let thickness = logic::height(layout_scale);
+
+        if self.panel_edge.is_vertical() {
+            let top = self.top + px(main_pos);
+            let bottom = top + px(part.width_scaled(layout_scale));
+            Some(RECT {
+                left: self.left,
+                top,
+                right: self.left + px(thickness),
+                bottom,
+            })
+        } else {
+            let rect = self.surface_rect;
+            let x = |dip| match rect {
+                Some(rect) => {
+                    rect.left
+                        + (px(dip) as f32 * (rect.right - rect.left) as f32 / self.width.max(1) as f32).round() as i32
+                }
+                None => self.left + px(dip),
+            };
+            let top = rect.map_or(self.top + self.slide_offset(px(thickness)), |r| {
+                r.bottom - px(thickness)
+            });
+            Some(RECT {
+                left: x(main_pos),
+                top,
+                right: x(main_pos + part.width_scaled(layout_scale)),
+                bottom: top + px(thickness),
+            })
+        }
     }
 
     /// An app slot's rectangle on screen where the dock rests, in physical pixels.
     fn item_rect(&self, slot: usize) -> RECT {
         let scale = self.dpi as f32 / 96.0;
         let px = |dip: f32| (dip * scale).round() as i32;
-        let rect = self.surface_rect;
-        let x = |dip| match rect {
-            Some(rect) => {
-                rect.left + (px(dip) as f32 * (rect.right - rect.left) as f32 / self.width.max(1) as f32).round() as i32
-            }
-            None => self.left + px(dip),
-        };
         let layout_scale = logic::layout_scale(self.app_icon_size);
-        let height = logic::height(layout_scale);
-        let left = self.app_layout().left(slot, layout_scale);
-        let top = rect.map_or(self.top + self.slide_offset(px(height)), |r| r.bottom - px(height));
-        RECT {
-            left: x(left),
-            top,
-            right: x(left + logic::slot(layout_scale)),
-            bottom: top + px(height),
+        let thickness = logic::height(layout_scale);
+        let main_pos = self.app_layout().left(slot, layout_scale);
+
+        if self.panel_edge.is_vertical() {
+            let top = self.top + px(main_pos);
+            let bottom = top + px(logic::slot(layout_scale));
+            RECT {
+                left: self.left,
+                top,
+                right: self.left + px(thickness),
+                bottom,
+            }
+        } else {
+            let rect = self.surface_rect;
+            let x = |dip| match rect {
+                Some(rect) => {
+                    rect.left
+                        + (px(dip) as f32 * (rect.right - rect.left) as f32 / self.width.max(1) as f32).round() as i32
+                }
+                None => self.left + px(dip),
+            };
+            let top = rect.map_or(self.top + self.slide_offset(px(thickness)), |r| {
+                r.bottom - px(thickness)
+            });
+            RECT {
+                left: x(main_pos),
+                top,
+                right: x(main_pos + logic::slot(layout_scale)),
+                bottom: top + px(thickness),
+            }
         }
     }
 
@@ -1559,15 +1641,33 @@ impl State {
         }
         let margin = (logic::FLYOUT_GAP * scale).round() as i32;
         let monitor = info.rcMonitor;
-        let x = ((chevron.left + chevron.right - width) / 2)
-            .min(monitor.right - margin - width)
-            .max(monitor.left + margin);
         let layout_scale = logic::layout_scale(self.app_icon_size);
         let dock_h = (logic::height(layout_scale) * scale).round() as i32;
-        let y = if self.panel_edge == PanelEdge::Top {
-            self.top + dock_h + margin
-        } else {
-            self.top - margin - height
+        let (x, y) = match self.panel_edge {
+            PanelEdge::Top => (
+                ((chevron.left + chevron.right - width) / 2)
+                    .min(monitor.right - margin - width)
+                    .max(monitor.left + margin),
+                self.top + dock_h + margin,
+            ),
+            PanelEdge::Bottom => (
+                ((chevron.left + chevron.right - width) / 2)
+                    .min(monitor.right - margin - width)
+                    .max(monitor.left + margin),
+                self.top - margin - height,
+            ),
+            PanelEdge::Left => (
+                self.left + self.width + margin,
+                ((chevron.top + chevron.bottom - height) / 2)
+                    .min(monitor.bottom - margin - height)
+                    .max(monitor.top + margin),
+            ),
+            PanelEdge::Right => (
+                self.left - margin - width,
+                ((chevron.top + chevron.bottom - height) / 2)
+                    .min(monitor.bottom - margin - height)
+                    .max(monitor.top + margin),
+            ),
         };
         unsafe {
             let _ = SetWindowPos(self.flyout, Some(HWND_TOPMOST), x, y, width, height, SWP_NOACTIVATE);
@@ -1778,10 +1878,10 @@ impl State {
         }
         let anchor = self.item_rect(slot);
         let gap = (6.0 * scale).round() as i32;
-        let available = if self.panel_edge == PanelEdge::Top {
-            info.rcWork.bottom - gap - (anchor.bottom + gap)
-        } else {
-            anchor.top - gap - (info.rcWork.top + gap)
+        let available = match self.panel_edge {
+            PanelEdge::Top => info.rcWork.bottom - gap - (anchor.bottom + gap),
+            PanelEdge::Bottom => anchor.top - gap - (info.rcWork.top + gap),
+            PanelEdge::Left | PanelEdge::Right => (info.rcWork.bottom - info.rcWork.top) - 2 * gap,
         };
         let capacity = logic::window_list_rows(available, scale, logic::LIST_PAD.1);
         if capacity == 0 {
@@ -1802,18 +1902,36 @@ impl State {
             return;
         };
         let (width, height) = ((width * scale).ceil() as i32, (height * scale).ceil() as i32);
-        let x = ((anchor.left + anchor.right - width) / 2)
-            .min(info.rcWork.right - gap - width)
-            .max(info.rcWork.left + gap);
+        let (x, y) = match self.panel_edge {
+            PanelEdge::Top => (
+                ((anchor.left + anchor.right - width) / 2)
+                    .min(info.rcWork.right - gap - width)
+                    .max(info.rcWork.left + gap),
+                anchor.bottom + gap,
+            ),
+            PanelEdge::Bottom => (
+                ((anchor.left + anchor.right - width) / 2)
+                    .min(info.rcWork.right - gap - width)
+                    .max(info.rcWork.left + gap),
+                anchor.top - gap - height,
+            ),
+            PanelEdge::Left => (
+                anchor.right + gap,
+                ((anchor.top + anchor.bottom - height) / 2)
+                    .min(info.rcWork.bottom - gap - height)
+                    .max(info.rcWork.top + gap),
+            ),
+            PanelEdge::Right => (
+                anchor.left - gap - width,
+                ((anchor.top + anchor.bottom - height) / 2)
+                    .min(info.rcWork.bottom - gap - height)
+                    .max(info.rcWork.top + gap),
+            ),
+        };
         self.hide_tip();
         self.windows_hover = self.windows_hover.filter(|&row| row < targets.len());
         self.windows_rows = rows;
         self.windows_targets = targets;
-        let y = if self.panel_edge == PanelEdge::Top {
-            anchor.bottom + gap
-        } else {
-            anchor.top - gap - height
-        };
         unsafe {
             let _ = SetWindowPos(
                 self.windows,
@@ -1885,13 +2003,31 @@ impl State {
             let _ = GetMonitorInfoW(MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST), &mut info);
         }
         let gap = (6.0 * scale).round() as i32;
-        let x = ((anchor.left + anchor.right - width) / 2)
-            .min(info.rcMonitor.right - gap - width)
-            .max(info.rcMonitor.left + gap);
-        let y = if self.panel_edge == PanelEdge::Top {
-            anchor.bottom + gap
-        } else {
-            anchor.top - gap - height
+        let (x, y) = match self.panel_edge {
+            PanelEdge::Top => (
+                ((anchor.left + anchor.right - width) / 2)
+                    .min(info.rcMonitor.right - gap - width)
+                    .max(info.rcMonitor.left + gap),
+                anchor.bottom + gap,
+            ),
+            PanelEdge::Bottom => (
+                ((anchor.left + anchor.right - width) / 2)
+                    .min(info.rcMonitor.right - gap - width)
+                    .max(info.rcMonitor.left + gap),
+                anchor.top - gap - height,
+            ),
+            PanelEdge::Left => (
+                anchor.right + gap,
+                ((anchor.top + anchor.bottom - height) / 2)
+                    .min(info.rcMonitor.bottom - gap - height)
+                    .max(info.rcMonitor.top + gap),
+            ),
+            PanelEdge::Right => (
+                anchor.left - gap - width,
+                ((anchor.top + anchor.bottom - height) / 2)
+                    .min(info.rcMonitor.bottom - gap - height)
+                    .max(info.rcMonitor.top + gap),
+            ),
         };
         self.tip_text = text;
         unsafe {

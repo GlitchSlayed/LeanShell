@@ -43,19 +43,28 @@ public class TaskbarRestorer {
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr FindWindowEx(IntPtr parentHandle, IntPtr childAfter, string className, string windowTitle);
+
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    public static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
 
     public const int SW_SHOW = 5;
 
     public static void ShowTaskbar() {
         IntPtr trayHwnd = FindWindow("Shell_TrayWnd", null);
         if (trayHwnd != IntPtr.Zero) {
+            SetWindowRgn(trayHwnd, IntPtr.Zero, true);
             ShowWindow(trayHwnd, SW_SHOW);
         }
-        IntPtr secondaryTray = FindWindow("Shell_SecondaryTrayWnd", null);
-        if (secondaryTray != IntPtr.Zero) {
-            ShowWindow(secondaryTray, SW_SHOW);
+        // Enumerate and restore all secondary taskbars across all monitors
+        IntPtr current = IntPtr.Zero;
+        while ((current = FindWindowEx(IntPtr.Zero, current, "Shell_SecondaryTrayWnd", null)) != IntPtr.Zero) {
+            SetWindowRgn(current, IntPtr.Zero, true);
+            ShowWindow(current, SW_SHOW);
         }
     }
 }

@@ -35,6 +35,15 @@ pub fn open(target: &str) -> Result<()> {
     execute(target, None, false)
 }
 
+/// Parses a command line with optional arguments and executes it.
+pub fn command_line(cmd: &str) -> Result<()> {
+    if let Some(parsed) = leanshell_core::startup_cmd::parse_command_line(cmd) {
+        execute(&parsed.target, parsed.args.as_deref(), false)
+    } else {
+        open(cmd)
+    }
+}
+
 pub fn shell(command: &str, admin: bool) -> Result<()> {
     execute(&system_tool(r"System32\cmd.exe"), Some(&format!("/k {command}")), admin)
 }

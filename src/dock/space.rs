@@ -256,6 +256,21 @@ fn register(hwnd: HWND) -> bool {
 fn unregister(hwnd: HWND) {
     let mut data = bar(hwnd);
     send(ABM_REMOVE, &mut data);
+
+    // In exclusive shell mode, restore full monitor work area
+    if crate::tray_host::explorer_tray().is_none()
+        && let Some((monitor, _, _)) = primary()
+    {
+        let mut work = monitor;
+        unsafe {
+            let _ = SystemParametersInfoW(
+                SPI_SETWORKAREA,
+                0,
+                Some(&mut work as *mut _ as _),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            );
+        }
+    }
 }
 
 /// `APPBARDATA` as `SHAppBarMessage` sends it to the taskbar: handles and
@@ -383,6 +398,26 @@ fn place(hwnd: HWND) {
         _ => data.rc.top = data.rc.bottom - thickness,
     }
     send(ABM_SETPOS, &mut data);
+
+    // In exclusive shell mode (no Explorer running), set work area directly:
+    if crate::tray_host::explorer_tray().is_none() {
+        let mut work = monitor;
+        match EDGE.get() {
+            ABE_TOP => work.top += thickness,
+            ABE_LEFT => work.left += thickness,
+            ABE_RIGHT => work.right -= thickness,
+            _ => work.bottom -= thickness,
+        }
+        unsafe {
+            let _ = SystemParametersInfoW(
+                SPI_SETWORKAREA,
+                0,
+                Some(&mut work as *mut _ as _),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            );
+        }
+    }
+
     // The window itself never moves or shows, so it needs no
     // ABM_WINDOWPOSCHANGED.
     STRIP.set(data.rc);

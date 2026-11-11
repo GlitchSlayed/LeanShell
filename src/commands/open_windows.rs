@@ -5,7 +5,8 @@ use windows::{
         Foundation::{CloseHandle, HWND, LPARAM, WPARAM},
         Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
         System::Threading::{
-            OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+            AttachThreadInput, GetCurrentThreadId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+            QueryFullProcessImageNameW,
         },
         UI::Input::KeyboardAndMouse::{KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_ESCAPE, keybd_event},
         UI::WindowsAndMessaging::*,
@@ -99,8 +100,8 @@ pub fn process_path(pid: u32) -> String {
     }
 }
 
-/// Brings the window to the front, restoring it if minimized. Works while the
-/// launcher is the foreground window.
+/// Brings the window to the front, restoring it if minimized. Non-blocking foreground
+/// activation using thread-input attachment without freezing the UI thread.
 pub fn focus(hwnd: isize) -> Result<(), String> {
     let hwnd = HWND(hwnd as _);
     unsafe {
@@ -109,33 +110,43 @@ pub fn focus(hwnd: isize) -> Result<(), String> {
         }
         if IsIconic(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_RESTORE);
+        } else {
+            let _ = ShowWindow(hwnd, SW_SHOW);
         }
         if GetForegroundWindow() == hwnd {
             return Ok(());
         }
-        if SetForegroundWindow(hwnd).as_bool() && wait_for_foreground(hwnd) {
+        if SetForegroundWindow(hwnd).as_bool() {
             return Ok(());
         }
-        // A shell flyout such as the Action Center holds the foreground from
-        // an AppContainer, where Windows refuses both a plain activation and
-        // thread-input attachment. Escape closes it, as the taskbar's own
-        // click does, and then the app can come forward.
+
+        // Dismiss shell flyouts (Action Center / Start / Search) if foreground is locked
         let foreground = GetForegroundWindow();
-        if !dismiss_shell_flyout(foreground) {
-            return Err("Windows did not switch to the window.".into());
+        let _ = dismiss_shell_flyout(foreground);
+
+        // Win32 foreground activation handoff via AttachThreadInput
+        let current_thread = GetCurrentThreadId();
+        let foreground_thread = GetWindowThreadProcessId(GetForegroundWindow(), None);
+        let target_thread = GetWindowThreadProcessId(hwnd, None);
+
+        if foreground_thread != 0 && foreground_thread != current_thread {
+            let _ = AttachThreadInput(current_thread, foreground_thread, true);
         }
-        for _ in 0..20 {
-            if GetForegroundWindow() != foreground {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+        if target_thread != 0 && target_thread != current_thread {
+            let _ = AttachThreadInput(current_thread, target_thread, true);
         }
+
+        let _ = BringWindowToTop(hwnd);
         let _ = SetForegroundWindow(hwnd);
-        if wait_for_foreground(hwnd) {
-            Ok(())
-        } else {
-            Err("Windows did not switch to the window.".into())
+
+        if foreground_thread != 0 && foreground_thread != current_thread {
+            let _ = AttachThreadInput(current_thread, foreground_thread, false);
         }
+        if target_thread != 0 && target_thread != current_thread {
+            let _ = AttachThreadInput(current_thread, target_thread, false);
+        }
+
+        Ok(())
     }
 }
 
@@ -153,20 +164,6 @@ pub fn minimize(hwnd: isize) -> Result<(), String> {
         }
         let _ = ShowWindow(hwnd, SW_MINIMIZE);
         Ok(())
-    }
-}
-
-/// Waits briefly for a requested activation to land; Windows reports it a
-/// moment after the call while the flyout closes.
-fn wait_for_foreground(hwnd: HWND) -> bool {
-    unsafe {
-        for _ in 0..20 {
-            if GetForegroundWindow() == hwnd {
-                return true;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        GetForegroundWindow() == hwnd
     }
 }
 

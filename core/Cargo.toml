@@ -1,6 +1,6 @@
 [package]
 name = "leanshell-core"
-version = "0.0.7"
+version = "0.0.8"
 edition = "2024"
 description = "Core logic, models, search grammar, and configuration for LeanShell"
 license = "MIT"

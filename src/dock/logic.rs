@@ -86,6 +86,7 @@ pub struct AppLayout {
     pub pinned: usize,
     pub panel_width: Option<f32>,
     pub center_apps: bool,
+    pub vertical: bool,
 }
 
 impl AppLayout {
@@ -122,10 +123,11 @@ impl AppLayout {
         total_width_scaled(self.count, parts, scale) + self.gap() * scale
     }
     pub fn hit(self, x: f32, y: f32, scale: f32) -> Option<usize> {
-        if !(0.0..height(scale)).contains(&y) {
+        let (cross, main) = if self.vertical { (x, y) } else { (y, x) };
+        if !(0.0..height(scale)).contains(&cross) {
             return None;
         }
-        (0..=self.count).find(|&i| (self.left(i, scale)..self.left(i, scale) + slot(scale)).contains(&x))
+        (0..=self.count).find(|&i| (self.left(i, scale)..self.left(i, scale) + slot(scale)).contains(&main))
     }
     pub fn part_left(self, part: Part, parts: &[Part], scale: f32) -> Option<f32> {
         if let Some(pw) = self.panel_width {
@@ -140,24 +142,25 @@ impl AppLayout {
         }
     }
     pub fn part_hit(self, x: f32, y: f32, parts: &[Part], scale: f32) -> Option<Part> {
+        let (cross, main) = if self.vertical { (x, y) } else { (y, x) };
         if let Some(pw) = self.panel_width {
             let end_pad = PANEL_END_PAD * scale;
             let parts_w: f32 = parts.iter().map(|p| p.width_scaled(scale)).sum();
             let parts_start = pw - end_pad - parts_w;
-            if x < parts_start || x > pw - end_pad || !(0.0..height(scale)).contains(&y) {
+            if main < parts_start || main > pw - end_pad || !(0.0..height(scale)).contains(&cross) {
                 return None;
             }
             let mut left = parts_start;
             for &part in parts {
                 let right = left + part.width_scaled(scale);
-                if (left..right).contains(&x) {
+                if (left..right).contains(&main) {
                     return Some(part);
                 }
                 left = right;
             }
             None
         } else {
-            part_hit_scaled(x - self.gap() * scale, y, self.count, parts, scale)
+            part_hit_scaled(main - self.gap() * scale, cross, self.count, parts, scale)
         }
     }
 }
@@ -424,6 +427,7 @@ mod tests {
                     pinned,
                     panel_width: None,
                     center_apps: false,
+                    vertical: false,
                 };
                 assert_eq!(layout.divider(), pinned > 0 && pinned < count);
                 let extra = if layout.divider() { SEPARATOR * scale } else { 0.0 };
@@ -455,6 +459,7 @@ mod tests {
                     pinned,
                     panel_width: Some(1920.0),
                     center_apps: false,
+                    vertical: false,
                 };
                 for part in &parts {
                     let px = panel_layout.part_left(*part, &parts, scale).unwrap();
@@ -471,11 +476,39 @@ mod tests {
                     pinned,
                     panel_width: Some(1920.0),
                     center_apps: true,
+                    vertical: false,
                 };
                 let first_x = centered_layout.left(0, scale);
                 let last_x = centered_layout.left(count, scale) + slot(scale);
                 let app_center = (first_x + last_x) / 2.0;
                 assert!((app_center - 1920.0 / 2.0).abs() < 1.0);
+            }
+        }
+    }
+
+    #[test]
+    fn vertical_panel_geometry_and_hits_agree() {
+        let parts = parts(Some(2), true, true);
+        for scale in [1.0, 1.25, 1.5] {
+            let v_layout = AppLayout {
+                count: 3,
+                pinned: 1,
+                panel_width: Some(1080.0),
+                center_apps: false,
+                vertical: true,
+            };
+            // Cross axis is X (0..height(scale)), main axis is Y
+            for i in 0..=3 {
+                let y = v_layout.left(i, scale);
+                // Inside cross axis: hits slot i
+                assert_eq!(v_layout.hit(10.0 * scale, y + 5.0, scale), Some(i));
+                // Outside cross axis (X >= height): no hit
+                assert_eq!(v_layout.hit(height(scale) + 1.0, y + 5.0, scale), None);
+            }
+            for part in &parts {
+                let py = v_layout.part_left(*part, &parts, scale).unwrap();
+                assert_eq!(v_layout.part_hit(10.0 * scale, py + 1.0, &parts, scale), Some(*part));
+                assert_eq!(v_layout.part_hit(height(scale) + 1.0, py + 1.0, &parts, scale), None);
             }
         }
     }

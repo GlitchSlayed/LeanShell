@@ -544,8 +544,9 @@ impl Launcher {
     }
 
     fn sync_exclusive_shell(&mut self) {
-        let is_exclusive = self.config.shell_mode == leanshell_core::config::ShellMode::Exclusive
-            || leanshell_platform_win::is_exclusive_shell_registered();
+        // Only establish desktop surface and startup apps if LeanShell actually owns
+        // the current interactive logon session (Explorer is not running as the desktop shell).
+        let is_exclusive = leanshell_platform_win::is_session_exclusive();
 
         if is_exclusive {
             if self.desktop.is_none() {
@@ -706,7 +707,9 @@ impl Launcher {
         let is_panel = self.config.display_mode == DisplayMode::Panel;
         let is_dock = self.config.display_mode == DisplayMode::Dock && self.config.dock;
         let hidden = self.taskbar.as_ref().is_some_and(TaskbarHider::is_active);
-        let wanted = hidden && (is_panel || (is_dock && self.dock.as_ref().is_some_and(Dock::stays_visible)));
+        let is_exclusive = leanshell_platform_win::is_session_exclusive();
+        let wanted =
+            (hidden || is_exclusive) && (is_panel || (is_dock && self.dock.as_ref().is_some_and(Dock::stays_visible)));
         let reserved_thickness = self.config.panel_thickness.map(|t| t as f32).unwrap_or_else(|| {
             self.dock
                 .as_ref()
@@ -2268,6 +2271,13 @@ impl Launcher {
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_RECOVERY);
         }
         tray::remove(self.hwnd);
+
+        // If we were running as the exclusive shell and we are quitting/closing,
+        // ensure Explorer is launched so the user is never left without a desktop shell!
+        if leanshell_platform_win::is_session_exclusive() && crate::tray_host::explorer_tray().is_none() {
+            eprintln!("LeanShell exclusive shutdown: launching explorer.exe shell handoff...");
+            let _ = std::process::Command::new("explorer.exe").spawn();
+        }
     }
 }
 
