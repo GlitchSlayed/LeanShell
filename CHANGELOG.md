@@ -2,6 +2,16 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.5 - 2026-11-10
+
+### Stabilization, Keyboard Hook Fixes & Centered Panel Alignment
+
+- **Windows Key Neutralization & Unstuck Modifier Fix**: Resolved the Windows key bug where bare Win tap left the Win modifier key logically stuck down in the OS keyboard buffer (causing keystrokes in search to trigger Windows shortcuts like Win+E, Win+R, Win+D). The low-level keyboard hook now injects a Control masking key while Win is down to suppress StartMenuExperienceHost, and safely passes the Win keyup to `CallNextHookEx` so Windows cleanly resets its modifier state.
+- **Panel Status Layout & Scaling Fix**: Fixed layout calculation in panel mode where monitor width in DIPs was erroneously multiplied by icon layout scale, which had broken the positioning of tray, volume, and clock status items when changing `dock_icon_size`.
+- **Clock & Date End Padding**: Added generous right padding (`PANEL_END_PAD = 14 DIP`) preventing the date and time from touching or overflowing the screen border in panel mode.
+- **Centered App & Search Icons (`panel_align`)**: Added `panel_align = "center" | "left"` (default `"center"`) in `config.toml` and LeanShell Settings, centering the search icon and pinned/running app cluster in panel mode while keeping status items right-aligned.
+- **Click Accuracy for Centered Apps**: Updated slot hit-testing and separator rendering to respect centered layout offsets.
+
 ## 0.0.4 - 2026-11-10
 
 ### Milestone 6: Exclusive Shell Mode (Boot Directly into LeanShell)

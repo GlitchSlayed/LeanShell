@@ -44,7 +44,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Error, GUID, PCWSTR, Result, w};
 
 use crate::commands::open_windows::{self, Window};
-use crate::config::{Backdrop, DisplayMode, PanelEdge, WindowListMode};
+use crate::config::{Backdrop, DisplayMode, PanelAlign, PanelEdge, WindowListMode};
 use crate::indexer::{AppEntry, IconPixels};
 use crate::theme::Palette;
 use crate::tray_host::{self, Action, TrayHost};
@@ -104,6 +104,7 @@ struct State {
     owner: HWND,
     display_mode: DisplayMode,
     panel_edge: PanelEdge,
+    panel_align: PanelAlign,
     apps: Vec<AppEntry>,
     icons: HashMap<String, Arc<IconPixels>>,
     items: Vec<Item>,
@@ -216,6 +217,7 @@ impl Dock {
             owner,
             display_mode: DisplayMode::Dock,
             panel_edge: PanelEdge::Bottom,
+            panel_align: PanelAlign::Center,
             apps: Vec::new(),
             icons: HashMap::new(),
             items: Vec::new(),
@@ -442,6 +444,16 @@ impl Dock {
         if s.panel_edge != edge {
             s.panel_edge = edge;
             s.place();
+            unsafe {
+                let _ = InvalidateRect(Some(s.hwnd), None, false);
+            }
+        }
+    }
+
+    pub fn set_panel_align(&mut self, align: PanelAlign) {
+        let mut s = self.state.borrow_mut();
+        if s.panel_align != align {
+            s.panel_align = align;
             unsafe {
                 let _ = InvalidateRect(Some(s.hwnd), None, false);
             }
@@ -925,6 +937,7 @@ impl State {
             count: self.count(),
             pinned: self.pinned.len().saturating_sub(self.scroll).min(self.count()),
             panel_width,
+            center_apps: self.display_mode == DisplayMode::Panel && self.panel_align == PanelAlign::Center,
         }
     }
 

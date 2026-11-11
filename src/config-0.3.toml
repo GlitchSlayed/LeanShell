@@ -8,6 +8,7 @@ hide_taskbar = false
 shell_mode = "companion"
 display_mode = "dock"
 panel_edge = "bottom"
+panel_align = "center"
 watchdog = true
 claim_win_key = true
 backend = "direct2d"

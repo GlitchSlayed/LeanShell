@@ -676,6 +676,7 @@ impl Launcher {
         if let Some(dock) = &mut self.dock {
             dock.set_display_mode(self.config.display_mode);
             dock.set_panel_edge(self.config.panel_edge);
+            dock.set_panel_align(self.config.panel_align);
             dock.pace_frames();
             dock.set_apps(&self.apps, &self.icons);
             dock.set_window_list_mode(self.config.window_list);

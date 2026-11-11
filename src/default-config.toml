@@ -61,6 +61,9 @@ display_mode = "dock"
 # Screen edge for the panel: "bottom", "top", "left", or "right".
 panel_edge = "bottom"
 
+# Horizontal alignment of search and app icons in panel mode: "center" (default) or "left".
+panel_align = "center"
+
 # Watchdog supervisor process to automatically restore the taskbar if LeanShell exits unexpectedly.
 watchdog = true
 

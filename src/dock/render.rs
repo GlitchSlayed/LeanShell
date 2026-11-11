@@ -582,7 +582,8 @@ unsafe fn draw(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
             separator(
                 target,
                 frame,
-                logic::left_scaled(frame.layout.pinned + 1, frame.layout_scale)
+                frame.layout.offset_x(frame.layout_scale)
+                    + logic::left_scaled(frame.layout.pinned + 1, frame.layout_scale)
                     + logic::separator_width(frame.layout_scale) / 2.0,
             );
         }
@@ -754,8 +755,10 @@ fn draw_status(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
         .tray
         .retain(|key, _| frame.tray.iter().any(|shown| shown.icon.key() == *key));
     let sep_x = if let Some(pw) = frame.layout.panel_width {
-        let status_start = pw * frame.layout_scale - logic::status_width_scaled(parts, frame.layout_scale);
-        status_start + logic::separator_width(frame.layout_scale) / 2.0
+        let end_pad = logic::PANEL_END_PAD * frame.layout_scale;
+        let parts_w: f32 = parts.iter().map(|p| p.width_scaled(frame.layout_scale)).sum();
+        let parts_start = pw - end_pad - parts_w;
+        parts_start - logic::pad(frame.layout_scale) - logic::separator_width(frame.layout_scale) / 2.0
     } else {
         frame.layout.width(frame.layout_scale) - logic::pad(frame.layout_scale)
             + logic::separator_width(frame.layout_scale) / 2.0

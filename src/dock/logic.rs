@@ -64,6 +64,7 @@ pub fn left_scaled(index: usize, scale: f32) -> f32 {
     left(index) * scale
 }
 
+#[allow(dead_code)]
 pub fn hit(x: f32, y: f32, running: usize) -> Option<usize> {
     if !(0.0..HEIGHT).contains(&y) {
         return None;
@@ -71,9 +72,12 @@ pub fn hit(x: f32, y: f32, running: usize) -> Option<usize> {
     (0..1 + running).find(|&i| (left(i)..left(i) + SLOT).contains(&x))
 }
 
+#[allow(dead_code)]
 pub fn hit_scaled(x: f32, y: f32, running: usize, scale: f32) -> Option<usize> {
     hit(x / scale, y / scale, running)
 }
+
+pub const PANEL_END_PAD: f32 = 14.0;
 
 /// App slots and the optional rule between visible pinned and running apps.
 #[derive(Clone, Copy)]
@@ -81,6 +85,7 @@ pub struct AppLayout {
     pub count: usize,
     pub pinned: usize,
     pub panel_width: Option<f32>,
+    pub center_apps: bool,
 }
 
 impl AppLayout {
@@ -90,14 +95,25 @@ impl AppLayout {
     pub fn gap(self) -> f32 {
         if self.divider() { SEPARATOR } else { 0.0 }
     }
+    pub fn offset_x(self, scale: f32) -> f32 {
+        if self.center_apps
+            && let Some(pw) = self.panel_width
+        {
+            let total = self.width(scale);
+            ((pw - total) / 2.0).max(pad(scale))
+        } else {
+            0.0
+        }
+    }
     pub fn left(self, index: usize, scale: f32) -> f32 {
-        (left(index)
-            + if self.divider() && index > self.pinned {
-                SEPARATOR
-            } else {
-                0.0
-            })
-            * scale
+        self.offset_x(scale)
+            + (left(index)
+                + if self.divider() && index > self.pinned {
+                    SEPARATOR
+                } else {
+                    0.0
+                })
+                * scale
     }
     pub fn width(self, scale: f32) -> f32 {
         width_scaled(self.count, scale) + self.gap() * scale
@@ -106,9 +122,6 @@ impl AppLayout {
         total_width_scaled(self.count, parts, scale) + self.gap() * scale
     }
     pub fn hit(self, x: f32, y: f32, scale: f32) -> Option<usize> {
-        if !self.divider() {
-            return hit_scaled(x, y, self.count, scale);
-        }
         if !(0.0..height(scale)).contains(&y) {
             return None;
         }
@@ -118,19 +131,23 @@ impl AppLayout {
         if let Some(pw) = self.panel_width {
             let index = parts.iter().position(|&p| p == part)?;
             let offset: f32 = parts[..index].iter().map(|p| p.width_scaled(scale)).sum();
-            let status_start = pw * scale - status_width_scaled(parts, scale);
-            Some(status_start + separator_width(scale) + pad(scale) + offset)
+            let end_pad = PANEL_END_PAD * scale;
+            let parts_w: f32 = parts.iter().map(|p| p.width_scaled(scale)).sum();
+            let parts_start = pw - end_pad - parts_w;
+            Some(parts_start + offset)
         } else {
             part_left_scaled(part, self.count, parts, scale).map(|x| x + self.gap() * scale)
         }
     }
     pub fn part_hit(self, x: f32, y: f32, parts: &[Part], scale: f32) -> Option<Part> {
         if let Some(pw) = self.panel_width {
-            let status_start = pw * scale - status_width_scaled(parts, scale);
-            if x < status_start || !(0.0..height(scale)).contains(&y) {
+            let end_pad = PANEL_END_PAD * scale;
+            let parts_w: f32 = parts.iter().map(|p| p.width_scaled(scale)).sum();
+            let parts_start = pw - end_pad - parts_w;
+            if x < parts_start || x > pw - end_pad || !(0.0..height(scale)).contains(&y) {
                 return None;
             }
-            let mut left = status_start + separator_width(scale) + pad(scale);
+            let mut left = parts_start;
             for &part in parts {
                 let right = left + part.width_scaled(scale);
                 if (left..right).contains(&x) {
@@ -406,6 +423,7 @@ mod tests {
                     count,
                     pinned,
                     panel_width: None,
+                    center_apps: false,
                 };
                 assert_eq!(layout.divider(), pinned > 0 && pinned < count);
                 let extra = if layout.divider() { SEPARATOR * scale } else { 0.0 };
@@ -436,11 +454,28 @@ mod tests {
                     count,
                     pinned,
                     panel_width: Some(1920.0),
+                    center_apps: false,
                 };
                 for part in &parts {
                     let px = panel_layout.part_left(*part, &parts, scale).unwrap();
                     assert_eq!(panel_layout.part_hit(px + 1.0, 10.0, &parts, scale), Some(*part));
                 }
+                let panel_clock = panel_layout.part_left(Part::Clock, &parts, scale).unwrap();
+                assert_eq!(
+                    panel_clock + Part::Clock.width_scaled(scale),
+                    1920.0 - PANEL_END_PAD * scale
+                );
+
+                let centered_layout = AppLayout {
+                    count,
+                    pinned,
+                    panel_width: Some(1920.0),
+                    center_apps: true,
+                };
+                let first_x = centered_layout.left(0, scale);
+                let last_x = centered_layout.left(count, scale) + slot(scale);
+                let app_center = (first_x + last_x) / 2.0;
+                assert!((app_center - 1920.0 / 2.0).abs() < 1.0);
             }
         }
     }

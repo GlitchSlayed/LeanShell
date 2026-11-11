@@ -75,6 +75,15 @@ pub enum PanelEdge {
     Right,
 }
 
+/// Horizontal alignment of search and app icons in panel mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PanelAlign {
+    #[default]
+    Center,
+    Left,
+}
+
 /// Rendering backend to draw the launcher and dock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -118,6 +127,8 @@ pub struct Config {
     pub display_mode: DisplayMode,
     #[serde(default)]
     pub panel_edge: PanelEdge,
+    #[serde(default)]
+    pub panel_align: PanelAlign,
     pub panel_thickness: Option<u32>,
     #[serde(default = "default_true")]
     pub watchdog: bool,
@@ -252,5 +263,14 @@ mod tests {
         let default = Config::default();
         assert_eq!(default.backend, Backend::Direct2d);
         assert_eq!(default.slint_renderer, SlintRendererConfig::Skia);
+    }
+
+    #[test]
+    fn panel_align_deserializes() {
+        let config = Config::parse("panel_align = \"left\"").unwrap();
+        assert_eq!(config.panel_align, PanelAlign::Left);
+
+        let default = Config::default();
+        assert_eq!(default.panel_align, PanelAlign::Center);
     }
 }

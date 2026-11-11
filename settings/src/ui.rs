@@ -49,6 +49,7 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
     window.set_hotkey(config.hotkey.into());
     window.set_display_mode(config.display_mode.into());
     window.set_panel_edge(config.panel_edge.into());
+    window.set_panel_align(config.panel_align.into());
     window.set_shell_mode(config.shell_mode.into());
     window.set_watchdog(config.watchdog);
     window.set_claim_win_key(config.claim_win_key);
@@ -111,6 +112,21 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
                 "panel_edge",
                 val.as_str().into(),
                 |w, v| w.set_panel_edge(v),
+                val,
+            );
+        });
+    }
+
+    {
+        let store = Arc::clone(&store);
+        let weak = window.as_weak();
+        window.on_panel_align_changed(move |val| {
+            apply_setting(
+                &store,
+                &weak,
+                "panel_align",
+                val.as_str().into(),
+                |w, v| w.set_panel_align(v),
                 val,
             );
         });

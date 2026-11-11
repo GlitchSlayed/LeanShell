@@ -24,6 +24,7 @@ pub struct Config {
     pub window_list: String,
     pub display_mode: String,
     pub panel_edge: String,
+    pub panel_align: String,
     pub shell_mode: String,
     pub watchdog: bool,
     pub claim_win_key: bool,
@@ -65,6 +66,8 @@ impl Config {
         choice(&display_mode, &["dock", "panel", "center"], "display_mode")?;
         let panel_edge = string("panel_edge").unwrap_or_else(|_| "bottom".into());
         choice(&panel_edge, &["bottom", "top", "left", "right"], "panel_edge")?;
+        let panel_align = string("panel_align").unwrap_or_else(|_| "center".into());
+        choice(&panel_align, &["center", "left"], "panel_align")?;
         let shell_mode = string("shell_mode").unwrap_or_else(|_| "companion".into());
         choice(&shell_mode, &["companion", "exclusive"], "shell_mode")?;
         let watchdog = boolean("watchdog").unwrap_or(true);
@@ -111,6 +114,7 @@ impl Config {
             window_list,
             display_mode,
             panel_edge,
+            panel_align,
             shell_mode,
             watchdog,
             claim_win_key,
@@ -251,6 +255,9 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         "panel_edge" if !matches!(value.as_str(), Some("bottom" | "top" | "left" | "right")) => {
             return Err("panel_edge must be bottom, top, left or right.".into());
         }
+        "panel_align" if !matches!(value.as_str(), Some("center" | "left")) => {
+            return Err("panel_align must be center or left.".into());
+        }
         "shell_mode" if !matches!(value.as_str(), Some("companion" | "exclusive")) => {
             return Err("shell_mode must be companion or exclusive.".into());
         }
@@ -266,8 +273,8 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         "slint_renderer" if !matches!(value.as_str(), Some("skia" | "vello" | "software")) => {
             return Err("slint_renderer must be skia, vello or software.".into());
         }
-        "window_list" | "display_mode" | "panel_edge" | "shell_mode" | "watchdog" | "claim_win_key" | "backend"
-        | "slint_renderer" => {}
+        "window_list" | "display_mode" | "panel_edge" | "panel_align" | "shell_mode" | "watchdog" | "claim_win_key"
+        | "backend" | "slint_renderer" => {}
         _ => return Err(format!("Unknown setting: {key}")),
     }
     Ok(())
@@ -297,6 +304,7 @@ mod tests {
         assert_eq!(config.window_list, "multiple");
         assert_eq!(config.display_mode, "dock");
         assert_eq!(config.panel_edge, "bottom");
+        assert_eq!(config.panel_align, "center");
         assert_eq!(config.shell_mode, "companion");
         assert!(config.watchdog);
         assert!(config.claim_win_key);

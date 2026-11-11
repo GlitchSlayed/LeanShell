@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Input::KeyboardAndMouse::{KEYEVENTF_KEYUP, VK_LWIN, VK_RWIN, keybd_event};
+use windows::Win32::UI::Input::KeyboardAndMouse::{KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_LWIN, VK_RWIN, keybd_event};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, KBDLLHOOKSTRUCT, MSG, PostMessageW, PostThreadMessageW,
     SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT,
@@ -70,16 +70,20 @@ unsafe extern "system" fn ll_keyboard_proc(n_code: i32, wparam: WPARAM, lparam: 
             }
 
             // Bare Windows key tap!
-            // Inject an innocuous dummy key event so Windows Explorer's Start menu trigger sees an intervening key.
-            keybd_event(0, 0, KEYEVENTF_KEYUP, EXTRA_INFO_DUMMY);
+            // Inject a mask key event (Control down and up) while Win is logically down.
+            // This satisfies Windows Explorer's heuristic that an intervening key occurred,
+            // preventing StartMenuExperienceHost from opening the Start menu.
+            keybd_event(0x11, 0x1D, KEYBD_EVENT_FLAGS(0), EXTRA_INFO_DUMMY);
+            keybd_event(0x11, 0x1D, KEYEVENTF_KEYUP, EXTRA_INFO_DUMMY);
 
             let target = TARGET_HWND.load(Ordering::Relaxed);
             if target != 0 {
                 let _ = PostMessageW(Some(HWND(target as _)), WM_APP_SHOW, WPARAM(0), LPARAM(0));
             }
 
-            // Swallow the Windows key release.
-            return LRESULT(1);
+            // Pass the Windows key release through to Windows so the OS modifier state
+            // is completely cleared, ensuring normal text typing without stuck Win modifier chords.
+            return CallNextHookEx(None, n_code, wparam, lparam);
         }
 
         CallNextHookEx(None, n_code, wparam, lparam)
