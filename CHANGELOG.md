@@ -2,6 +2,15 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.1 - 2026-11-10
+
+### LeanShell Initial Early Experimental Release
+
+- **LeanShell Rebranding & Core Philosophy**: Forked from Wisp with strict ~0% idle resource use goals.
+- **Core Decoupling (Phase 1)**: Pure, toolkit-independent `core` crate for search grammar, calculator, config, history, and models. Agnostic `render` crate with swappable `Renderer` trait.
+- **Aggressive Taskbar Takeover (Phase 2)**: Persistent `TaskbarCreated` suppression, `--restore-shell` CLI recovery flag, watchdog supervisor configuration, and emergency recovery hotkey (Ctrl+Alt+Shift+Escape).
+- **Panel Mode (Phase 3)**: Persistent edge-docked taskbar mode (`display_mode = "panel"`) that reserves screen work areas via AppBar across all 4 display edges (Bottom, Top, Left, Right).
+
 ## Unreleased
 
 ### New

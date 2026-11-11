@@ -1,11 +1,11 @@
 [package]
 name = "leanshell"
-version = "0.6.1"
+version = "0.0.1"
 edition = "2024"
 description = "A Windows 11 shell, dock, and launcher replacement with ~0% idle resource use"
 license = "MIT"
 authors = ["Sumir Seth", "LeanShell Contributors"]
-repository = "https://github.com/vanshdatta/LeanShell"
+repository = "https://github.com/GlitchSlayed/LeanShell"
 readme = "README.md"
 keywords = ["dock", "launcher", "taskbar", "windows", "productivity"]
 categories = ["command-line-utilities"]

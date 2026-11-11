@@ -3,7 +3,7 @@
 .SYNOPSIS
 Generate winget manifests and a Scoop manifest from a release zip, without publishing.
 .EXAMPLE
-pwsh -File packaging/winget/generate.ps1 -Tag v0.6.0 -ZipPath ./wisp-v0.6.0-x86_64-windows.zip -OutputDirectory ./manifests
+pwsh -File packaging/winget/generate.ps1 -Tag v0.0.1 -ZipPath ./leanshell-v0.0.1-x86_64-windows.zip -OutputDirectory ./manifests
 #>
 [CmdletBinding()]
 param(
@@ -13,8 +13,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $version = $Tag.Substring(1)
-$repo = 'https://github.com/SumirSeth/wisp'
-$url = "$repo/releases/download/$Tag/wisp-$Tag-x86_64-windows.zip"
+$repo = 'https://github.com/GlitchSlayed/LeanShell'
+$url = "$repo/releases/download/$Tag/leanshell-$Tag-x86_64-windows.zip"
 $sha256 = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash
 
 # Old releases have a versioned top folder. Inspect exact entries rather than
@@ -22,10 +22,10 @@ $sha256 = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash
 $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $ZipPath))
 try {
     $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-    $folder = "wisp-$Tag-x86_64-windows"
-    if ('wisp.exe' -cin $entries -and 'wisp-settings.exe' -cin $entries) {
+    $folder = "leanshell-$Tag-x86_64-windows"
+    if ('leanshell.exe' -cin $entries -and 'leanshell-settings.exe' -cin $entries) {
         $prefix = ''
-    } elseif ("$folder/wisp.exe" -cin $entries -and "$folder/wisp-settings.exe" -cin $entries) {
+    } elseif ("$folder/leanshell.exe" -cin $entries -and "$folder/leanshell-settings.exe" -cin $entries) {
         $prefix = "$folder\"
     } else {
         throw 'The zip must contain both executables at its root or in its release folder.'
@@ -40,57 +40,58 @@ New-Item -ItemType Directory -Force $winget, $scoop | Out-Null
 
 @"
 # yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.10.0.schema.json
-PackageIdentifier: SumirSeth.Wisp
+PackageIdentifier: GlitchSlayed.LeanShell
 PackageVersion: $version
 DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.10.0
-"@ | Set-Content -Encoding utf8 (Join-Path $winget 'SumirSeth.Wisp.yaml')
+"@ | Set-Content -Encoding utf8 (Join-Path $winget 'GlitchSlayed.LeanShell.yaml')
 
 @"
 # yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
-PackageIdentifier: SumirSeth.Wisp
+PackageIdentifier: GlitchSlayed.LeanShell
 PackageVersion: $version
 PackageLocale: en-US
-Publisher: Sumir Seth
-PublisherUrl: https://github.com/SumirSeth
-PackageName: Wisp
+Publisher: GlitchSlayed
+PublisherUrl: https://github.com/GlitchSlayed
+PackageName: LeanShell
 PackageUrl: $repo
 License: MIT
 LicenseUrl: $repo/blob/$Tag/LICENSE
-ShortDescription: A dock and a launcher for Windows.
-Moniker: wisp
+ShortDescription: A high-performance shell, dock, and launcher replacement for Windows.
+Moniker: leanshell
 Tags:
 - dock
 - launcher
 - taskbar
+- shell
 ReleaseNotesUrl: $repo/releases/tag/$Tag
 ManifestType: defaultLocale
 ManifestVersion: 1.10.0
-"@ | Set-Content -Encoding utf8 (Join-Path $winget 'SumirSeth.Wisp.locale.en-US.yaml')
+"@ | Set-Content -Encoding utf8 (Join-Path $winget 'GlitchSlayed.LeanShell.locale.en-US.yaml')
 
 @"
 # yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
-PackageIdentifier: SumirSeth.Wisp
+PackageIdentifier: GlitchSlayed.LeanShell
 PackageVersion: $version
 MinimumOSVersion: 10.0.19041.0
 InstallerType: zip
 NestedInstallerType: portable
 NestedInstallerFiles:
-- RelativeFilePath: ${prefix}wisp.exe
-  PortableCommandAlias: wisp
-- RelativeFilePath: ${prefix}wisp-settings.exe
-  PortableCommandAlias: wisp-settings
+- RelativeFilePath: ${prefix}leanshell.exe
+  PortableCommandAlias: leanshell
+- RelativeFilePath: ${prefix}leanshell-settings.exe
+  PortableCommandAlias: leanshell-settings
 Installers:
 - Architecture: x64
   InstallerUrl: $url
   InstallerSha256: $sha256
 ManifestType: installer
 ManifestVersion: 1.10.0
-"@ | Set-Content -Encoding utf8 (Join-Path $winget 'SumirSeth.Wisp.installer.yaml')
+"@ | Set-Content -Encoding utf8 (Join-Path $winget 'GlitchSlayed.LeanShell.installer.yaml')
 
 # The checked-in manifest provides Scoop metadata and future update rules.
-$manifest = Get-Content (Join-Path $PSScriptRoot '../scoop/wisp.json') -Raw | ConvertFrom-Json -AsHashtable
+$manifest = Get-Content (Join-Path $PSScriptRoot '../scoop/leanshell.json') -Raw | ConvertFrom-Json -AsHashtable
 $manifest.version = $version
 $manifest.architecture.'64bit'.url = $url
 $manifest.architecture.'64bit'.hash = $sha256.ToLowerInvariant()
@@ -99,5 +100,5 @@ if ($prefix) {
 } else {
     $manifest.Remove('extract_dir')
 }
-$manifest | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 (Join-Path $scoop 'wisp.json')
+$manifest | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 (Join-Path $scoop 'leanshell.json')
 Write-Output "Generated winget $version ($sha256) in $winget and Scoop in $scoop."

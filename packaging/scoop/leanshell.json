@@ -1,0 +1,34 @@
+{
+    "version": "0.0.1",
+    "description": "A high-performance shell, dock, and launcher replacement for Windows.",
+    "homepage": "https://github.com/GlitchSlayed/LeanShell",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/GlitchSlayed/LeanShell/releases/download/v0.0.1/leanshell-v0.0.1-x86_64-windows.zip",
+            "hash": ""
+        }
+    },
+    "extract_dir": "leanshell-v0.0.1-x86_64-windows",
+    "bin": [
+        "leanshell.exe",
+        "leanshell-settings.exe"
+    ],
+    "shortcuts": [
+        ["leanshell.exe", "LeanShell"],
+        ["leanshell-settings.exe", "LeanShell Settings"]
+    ],
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/GlitchSlayed/LeanShell/releases/download/v$version/leanshell-v$version-x86_64-windows.zip",
+                "hash": {
+                    "url": "https://github.com/GlitchSlayed/LeanShell/releases/download/v$version/SHA256SUMS.txt",
+                    "regex": "(?m)^$sha256\\s+\\*?leanshell-v$version-x86_64-windows\\.zip\\r?$"
+                }
+            }
+        },
+        "extract_dir": "."
+    }
+}

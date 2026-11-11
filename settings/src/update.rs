@@ -21,8 +21,11 @@ use windows::{
     core::{PCWSTR, PWSTR, w},
 };
 
-const LATEST_URL: &str = "https://api.github.com/repos/SumirSeth/wisp/releases/latest";
-const FILES: [(&str, &str); 2] = [("wisp.exe", "wisp"), ("wisp-settings.exe", "wisp-settings")];
+const LATEST_URL: &str = "https://api.github.com/repos/GlitchSlayed/LeanShell/releases/latest";
+const FILES: [(&str, &str); 2] = [
+    ("leanshell.exe", "leanshell"),
+    ("leanshell-settings.exe", "leanshell-settings"),
+];
 /// The launcher quits when it receives this message (WM_APP_QUIT in the launcher).
 const LAUNCHER_QUIT: u32 = WM_APP + 4;
 
@@ -90,16 +93,16 @@ pub fn install(release: &Release) -> Result<(), String> {
             }
             remove_staged();
             if launcher_was_running {
-                let _ = std::process::Command::new(dir.join("wisp.exe")).spawn();
+                let _ = std::process::Command::new(dir.join("leanshell.exe")).spawn();
             }
             return Err(error);
         }
         swapped.push((target.clone(), old_path(target)));
     }
     if launcher_was_running {
-        std::process::Command::new(dir.join("wisp.exe"))
+        std::process::Command::new(dir.join("leanshell.exe"))
             .spawn()
-            .map_err(|error| format!("Wisp is updated, but it did not restart: {error}"))?;
+            .map_err(|error| format!("LeanShell is updated, but it did not restart: {error}"))?;
     }
     Ok(())
 }
@@ -112,7 +115,7 @@ fn stage_release(
     dir: &Path,
     mut download: impl FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<Vec<(PathBuf, PathBuf)>, String> {
-    let zip_name = format!("wisp-{}-x86_64-windows.zip", release.tag);
+    let zip_name = format!("leanshell-{}-x86_64-windows.zip", release.tag);
     let contents = if let Ok(url) = release.asset_url(&zip_name) {
         let bytes = download(url)?;
         verify(&zip_name, &bytes, sums)?;
@@ -161,7 +164,7 @@ fn extract_executables(bytes: &[u8], tag: &str) -> Result<Vec<Vec<u8>>, String> 
 
     let fail = |error| format!("Cannot read the release zip: {error}. Nothing was changed.");
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(fail)?;
-    let folder = format!("wisp-{tag}-x86_64-windows");
+    let folder = format!("leanshell-{tag}-x86_64-windows");
     let mut contents = Vec::new();
     for (file, _) in FILES {
         // Look up exact names; never extract arbitrary paths from the archive.
@@ -189,7 +192,7 @@ fn extract_executables(bytes: &[u8], tag: &str) -> Result<Vec<Vec<u8>>, String> 
 
 /// Starts the new settings app on the About page. The caller then quits.
 pub fn restart_settings() -> Result<(), String> {
-    let exe = install_dir()?.join("wisp-settings.exe");
+    let exe = install_dir()?.join("leanshell-settings.exe");
     std::process::Command::new(exe)
         .args(["--page", "about"])
         .spawn()
@@ -199,7 +202,7 @@ pub fn restart_settings() -> Result<(), String> {
 
 /// Deletes the `.old` files a previous update left behind, on a background
 /// thread. Right after Restart, the old settings app may still be running from
-/// `wisp-settings.exe.old`, so this retries for a few seconds. It skips files
+/// `leanshell-settings.exe.old`, so this retries for a few seconds. It skips files
 /// while an update runs, because they are that update's backups.
 pub fn remove_old_files() {
     if crate::install::current_manager().is_some() {
@@ -232,7 +235,7 @@ struct UpdateLock(HANDLE);
 impl UpdateLock {
     fn acquire() -> Option<Self> {
         unsafe {
-            let mutex = CreateMutexW(None, false, w!("Local\\Wisp.Settings.Update")).ok()?;
+            let mutex = CreateMutexW(None, false, w!("Local\\LeanShell.Settings.Update")).ok()?;
             let wait = WaitForSingleObject(mutex, 0);
             if wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED {
                 Some(Self(mutex))
@@ -257,7 +260,7 @@ fn install_dir() -> Result<PathBuf, String> {
     std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        .ok_or_else(|| "Cannot find the Wisp folder.".into())
+        .ok_or_else(|| "Cannot find the LeanShell folder.".into())
 }
 
 fn old_path(target: &Path) -> PathBuf {
@@ -290,15 +293,15 @@ fn stop_launcher(dir: &Path) -> Result<bool, String> {
         let mut pid = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         let process = OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
-            .map_err(|error| format!("Cannot find the running Wisp: {error}"))?;
-        let result = if !same_file(&process_path(process), &dir.join("wisp.exe")) {
+            .map_err(|error| format!("Cannot find the running LeanShell: {error}"))?;
+        let result = if !same_file(&process_path(process), &dir.join("leanshell.exe")) {
             Ok(false)
         } else if PostMessageW(Some(hwnd), LAUNCHER_QUIT, WPARAM(0), LPARAM(0)).is_ok()
             && WaitForSingleObject(process, 5000) == WAIT_OBJECT_0
         {
             Ok(true)
         } else {
-            Err("Wisp did not close. Quit it from its notification area icon, then try again.".into())
+            Err("LeanShell did not close. Quit it from its notification area icon, then try again.".into())
         };
         let _ = CloseHandle(process);
         result
@@ -328,7 +331,7 @@ fn parse_release(body: &[u8]) -> Result<Release, String> {
         serde_json::from_slice(body).map_err(|error| format!("Cannot read the release from GitHub: {error}"))?;
     let text = |value: &serde_json::Value, key: &str| value.get(key).and_then(|v| v.as_str()).map(str::to_owned);
     let tag = text(&json, "tag_name").ok_or("The release from GitHub has no version.")?;
-    let page = text(&json, "html_url").unwrap_or_else(|| "https://github.com/SumirSeth/wisp/releases".into());
+    let page = text(&json, "html_url").unwrap_or_else(|| "https://github.com/GlitchSlayed/LeanShell/releases".into());
     let assets = json
         .get("assets")
         .and_then(|assets| assets.as_array())
@@ -390,7 +393,7 @@ fn get(url: &str) -> Result<Vec<u8>, String> {
     }
 
     unsafe {
-        let agent = wide(format!("Wisp/{}", env!("CARGO_PKG_VERSION")));
+        let agent = wide(format!("LeanShell/{}", env!("CARGO_PKG_VERSION")));
         let session = Handle(WinHttpOpen(
             PCWSTR(agent.as_ptr()),
             WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
@@ -526,11 +529,11 @@ mod tests {
         use std::io::{Cursor, Write};
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for (file, _) in FILES {
-            if file == "wisp-settings.exe" && !include_settings {
+            if file == "leanshell-settings.exe" && !include_settings {
                 continue;
             }
             let name = if folder {
-                format!("wisp-v99.0.0-x86_64-windows/{file}")
+                format!("leanshell-v99.0.0-x86_64-windows/{file}")
             } else {
                 file.into()
             };
@@ -550,9 +553,9 @@ mod tests {
             br#"{
             "tag_name": "v99.0.0",
             "assets": [
-                {"name": "wisp-v99.0.0-x86_64-windows.zip", "browser_download_url": "zip"},
-                {"name": "wisp-v99.0.0-x86_64.exe", "browser_download_url": "launcher"},
-                {"name": "wisp-settings-v99.0.0-x86_64.exe", "browser_download_url": "settings"}
+                {"name": "leanshell-v99.0.0-x86_64-windows.zip", "browser_download_url": "zip"},
+                {"name": "leanshell-v99.0.0-x86_64.exe", "browser_download_url": "launcher"},
+                {"name": "leanshell-settings-v99.0.0-x86_64.exe", "browser_download_url": "settings"}
             ]
         }"#,
         )
@@ -581,7 +584,7 @@ mod tests {
             std::fs::create_dir(&install).unwrap();
             seed_install(&install);
             let release = release_with_zip();
-            let zip_name = "wisp-v99.0.0-x86_64-windows.zip";
+            let zip_name = "leanshell-v99.0.0-x86_64-windows.zip";
             let bytes = zip_bytes(folder, true);
             std::fs::write(fixture.path().join(zip_name), &bytes).unwrap();
             std::fs::write(
@@ -595,7 +598,7 @@ mod tests {
                 std::fs::read(fixture.path().join(zip_name)).map_err(|e| e.to_string())
             })
             .unwrap();
-            // Exercise the same rename/.old operations as install(), without stopping or starting Wisp.
+            // Exercise the same rename/.old operations as install(), without stopping or starting LeanShell.
             for (target, new) in staged {
                 swap(&target, &new).unwrap();
                 let file = target.file_name().unwrap().to_str().unwrap();
@@ -616,7 +619,7 @@ mod tests {
         for (file, _) in FILES {
             writer
                 .start_file(
-                    format!("wisp-v99.0.0-x86_64-windows\\{file}"),
+                    format!("leanshell-v99.0.0-x86_64-windows\\{file}"),
                     zip::write::SimpleFileOptions::default(),
                 )
                 .unwrap();
@@ -624,8 +627,8 @@ mod tests {
         }
         let bytes = writer.finish().unwrap().into_inner();
         let contents = extract_executables(&bytes, "v99.0.0").unwrap();
-        assert_eq!(contents[0], b"wisp.exe");
-        assert_eq!(contents[1], b"wisp-settings.exe");
+        assert_eq!(contents[0], b"leanshell.exe");
+        assert_eq!(contents[1], b"leanshell-settings.exe");
     }
 
     #[test]
@@ -642,7 +645,7 @@ mod tests {
         let mut release = release_with_zip();
         let name = path.file_name().unwrap().to_str().unwrap();
         release.tag = name
-            .strip_prefix("wisp-")
+            .strip_prefix("leanshell-")
             .unwrap()
             .strip_suffix("-x86_64-windows.zip")
             .unwrap()
@@ -659,12 +662,12 @@ mod tests {
             assert!(!new.exists());
         }
         assert!(
-            std::fs::read(dir.path().join("wisp.exe"))
+            std::fs::read(dir.path().join("leanshell.exe"))
                 .unwrap()
                 .starts_with(b"fake launcher")
         );
         assert!(
-            std::fs::read(dir.path().join("wisp-settings.exe"))
+            std::fs::read(dir.path().join("leanshell-settings.exe"))
                 .unwrap()
                 .starts_with(b"fake settings")
         );
@@ -681,7 +684,7 @@ mod tests {
             let dir = test_dir();
             seed_install(dir.path());
             let hash = checksum.map(str::to_owned).unwrap_or_else(|| sha256_hex(&bytes));
-            let sums = [("wisp-v99.0.0-x86_64-windows.zip", hash.as_str())];
+            let sums = [("leanshell-v99.0.0-x86_64-windows.zip", hash.as_str())];
             let error = stage_release(&release_with_zip(), &sums, dir.path(), |url| {
                 assert_eq!(url, "zip", "invalid zips must not fall back to standalone exes");
                 Ok(bytes.clone())
@@ -719,8 +722,8 @@ mod tests {
         let launcher_hash = sha256_hex(launcher);
         let settings_hash = sha256_hex(settings);
         let mut sums = [
-            ("wisp-v99.0.0-x86_64.exe", launcher_hash.as_str()),
-            ("wisp-settings-v99.0.0-x86_64.exe", "wrong"),
+            ("leanshell-v99.0.0-x86_64.exe", launcher_hash.as_str()),
+            ("leanshell-settings-v99.0.0-x86_64.exe", "wrong"),
         ];
         let download = |url: &str| match url {
             "launcher" => Ok(launcher.to_vec()),
@@ -744,14 +747,14 @@ mod tests {
     fn removes_both_staged_files_if_writing_fails() {
         let dir = test_dir();
         seed_install(dir.path());
-        let blocked = dir.path().join("wisp-settings.exe.new");
+        let blocked = dir.path().join("leanshell-settings.exe.new");
         std::fs::create_dir(&blocked).unwrap();
         let bytes = zip_bytes(true, true);
         let hash = sha256_hex(&bytes);
         assert!(
             stage_release(
                 &release_with_zip(),
-                &[("wisp-v99.0.0-x86_64-windows.zip", &hash)],
+                &[("leanshell-v99.0.0-x86_64-windows.zip", &hash)],
                 dir.path(),
                 |_| Ok(bytes.clone())
             )
