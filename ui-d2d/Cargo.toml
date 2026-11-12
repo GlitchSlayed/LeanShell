@@ -1,6 +1,6 @@
 [package]
 name = "leanshell-ui-d2d"
-version = "0.0.9"
+version = "0.0.10"
 edition = "2024"
 description = "Direct2D software renderer backend for LeanShell"
 license = "MIT"

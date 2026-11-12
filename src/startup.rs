@@ -3,34 +3,118 @@
 //! When LeanShell runs as the exclusive shell (explorer not running at logon),
 //! this module executes startup items from HKCU/HKLM Run and RunOnce registry
 //! keys and the user/common Startup folders.
+//!
+//! # Session-scoped dispatch guard (U09)
+//!
+//! The original implementation used a named kernel event (`Local\LeanShell_StartupDispatched`)
+//! to prevent re-launching startup apps if LeanShell restarted within the same logon session.
+//! That event is released when the process exits, so a crash-restart cycle re-dispatches every
+//! startup item.
+//!
+//! The correct guard is a persistent registry key stamped with the Windows *authentication ID*
+//! (a LUID from `GetTokenInformation(TokenStatistics)`). The LUID identifies the logon session
+//! at the kernel level and is stable across all LeanShell process instances in that session.
+//! On first dispatch we write the key; on subsequent launches we find it and skip.
+//! The key is under `HKCU\Software\LeanShell\StartupDispatched` and is specific to the LUID,
+//! so it does not interfere with other users' sessions or other Windows installations.
 
 use std::path::PathBuf;
-use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
+use windows::Win32::Foundation::LUID;
+use windows::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_STATISTICS, TokenStatistics};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::System::Registry::*;
-use windows::Win32::System::Threading::CreateEventW;
+use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::core::{PCWSTR, PWSTR, w};
 
 const RUN_SUBKEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Run");
 const RUNONCE_SUBKEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\RunOnce");
+const DISPATCH_SUBKEY: &str = r"Software\LeanShell\StartupDispatched";
+
+/// Returns the authentication LUID for the current logon session.
+///
+/// The LUID from `TokenStatistics.AuthenticationId` uniquely identifies the logon session
+/// at the kernel level. It is constant for all processes in the same user logon, including
+/// after a shell restart or crash-recovery cycle.
+fn logon_session_luid() -> Option<LUID> {
+    // SAFETY: Querying the current process token for read-only statistics.
+    unsafe {
+        let mut token = windows::Win32::Foundation::HANDLE::default();
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).ok()?;
+        let mut stats = TOKEN_STATISTICS::default();
+        let mut returned = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenStatistics,
+            Some(&mut stats as *mut _ as *mut _),
+            size_of::<TOKEN_STATISTICS>() as u32,
+            &mut returned,
+        );
+        let _ = windows::Win32::Foundation::CloseHandle(token);
+        ok.ok()?;
+        Some(stats.AuthenticationId)
+    }
+}
+
+/// Returns `true` if startup apps have already been dispatched in this logon session.
+/// Writes a durable registry marker so the guard survives process restarts within the session.
+fn check_and_mark_dispatched() -> bool {
+    let Some(luid) = logon_session_luid() else {
+        // If we cannot determine the session LUID (e.g. token query fails) fall through
+        // to dispatch rather than silently suppressing startup items.
+        return false;
+    };
+
+    // Key name encodes both LUID halves so each logon session has its own marker.
+    let marker_value = format!("{:08X}_{:08X}", luid.HighPart, luid.LowPart);
+    let subkey_wide: Vec<u16> = DISPATCH_SUBKEY.encode_utf16().chain(Some(0)).collect();
+    let marker_wide: Vec<u16> = marker_value.encode_utf16().chain(Some(0)).collect();
+
+    // SAFETY: Reading/writing our own HKCU subkey for session dispatch tracking.
+    unsafe {
+        // Try to read the marker — if it exists we have already dispatched.
+        let mut buffer = [0u16; 4];
+        let mut size = (buffer.len() * 2) as u32;
+        let already = RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(subkey_wide.as_ptr()),
+            PCWSTR(marker_wide.as_ptr()),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(buffer.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+        .is_ok();
+
+        if already {
+            return true;
+        }
+
+        // Not dispatched yet — write the marker before we start dispatch so that
+        // a crash mid-dispatch still marks the session (apps will not relaunch).
+        let one: u32 = 1;
+        let _ = RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(subkey_wide.as_ptr()),
+            PCWSTR(marker_wide.as_ptr()),
+            REG_DWORD.0,
+            Some(one.to_ne_bytes().as_ptr().cast()),
+            4,
+        );
+
+        false
+    }
+}
 
 /// Spawns a background worker thread to enumerate and execute startup applications.
-/// Guarded by a session-scoped kernel event to ensure apps are launched only once per logon session.
+///
+/// Guarded by a durable per-logon-session registry marker. The marker is keyed by the
+/// authentication LUID so it survives process restarts (unlike a named kernel event which
+/// disappears when the process exits).
 pub fn launch_logon_startup_apps() {
-    // SAFETY: Creating a session-scoped named kernel event to prevent repeat dispatching
-    // if LeanShell restarts within the same logon session.
-    let event = unsafe { CreateEventW(None, true, false, w!(r"Local\LeanShell_StartupDispatched")) };
-    if let Ok(handle) = event {
-        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-            // Already dispatched for this logon session!
-            unsafe {
-                let _ = CloseHandle(handle);
-            }
-            return;
-        }
-        // Retain the handle open for the session duration (HANDLE does not drop-close)
-        let _ = handle;
+    // Check and stamp the dispatch marker. Returns true if already dispatched this session.
+    if check_and_mark_dispatched() {
+        return;
     }
 
     std::thread::Builder::new()

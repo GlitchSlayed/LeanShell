@@ -2,6 +2,29 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.10 - 2026-11-12
+
+### Follow-Up Audit Remediation (U09, U12)
+
+- **U12 (P2) — Vertical Panel Capacity & Mode Transition Consistency**:
+  - Panel capacity calculation previously used monitor width (`rcMonitor.right - rcMonitor.left`)
+    for all edges, causing vertical panels on landscape screens to overestimate available slots
+    (e.g. calculating against 1920px width rather than 1080px height), breaking scroll and overflow.
+  - Extracted shared geometry helper `logic::capacity_from_span` to guarantee platform and test agreement.
+  - Implemented `is_effective_vertical()` on `State` so that orientation checks (`app_layout`, `part_rect`,
+    `item_rect`) strictly require `display_mode == DisplayMode::Panel && panel_edge.is_vertical()`,
+    preventing inconsistent vertical states when switching a left/right panel into floating Dock mode.
+  - Added unit test `vertical_capacity_bounded_by_height_not_width` in `src/dock/logic.rs`.
+
+- **U09 (P2) — Session-Scoped Startup Dispatch Guard Durability**:
+  - Previously relied on an ephemeral named kernel event (`Local\LeanShell_StartupDispatched`), which was
+    destroyed when the process exited, leading to repeated startup app execution if LeanShell restarted
+    or crashed within the same logon session.
+  - Replaced with a persistent registry dispatch marker under `HKCU\Software\LeanShell\StartupDispatched`
+    stamped with the Windows Authentication LUID from `GetTokenInformation(TokenStatistics)`.
+  - The LUID uniquely identifies the user's active kernel logon session and survives shell restarts/crashes,
+    ensuring logon startup entries run strictly once per login.
+
 ## 0.0.9 - 2026-11-11
 
 ### Follow-Up Audit Remediation (U01–U14)

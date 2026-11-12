@@ -56,6 +56,24 @@ pub fn width_scaled(running: usize, scale: f32) -> f32 {
     width(running) * scale
 }
 
+/// Computes the number of app slots that fit in `mon_span` physical pixels at `scale` DPI and
+/// `layout_scale` icon size, accounting for status parts width and an optional divider.
+///
+/// For horizontal panels/dock: pass the monitor **width** as `mon_span`.
+/// For vertical panels (Left/Right edge): pass the monitor **height** as `mon_span`.
+/// This function is the shared source of truth so both the platform code and unit tests use the
+/// same formula, avoiding drift between them.
+pub fn capacity_from_span(mon_span: i32, scale: f32, layout_scale: f32, parts_width: f32, has_divider: bool) -> usize {
+    let status = parts_width
+        + if has_divider {
+            separator_width(layout_scale)
+        } else {
+            0.0
+        };
+    let available = mon_span as f32 / scale - 8.0 * layout_scale - status;
+    ((available - 2.0 * pad(layout_scale) - separator_width(layout_scale)) / slot(layout_scale)).max(0.0) as usize
+}
+
 pub fn left(index: usize) -> f32 {
     PAD + index as f32 * SLOT
 }
@@ -296,6 +314,7 @@ pub fn status_width(parts: &[Part]) -> f32 {
     SEPARATOR + parts.iter().map(|part| part.width()).sum::<f32>()
 }
 
+#[allow(dead_code)]
 pub fn status_width_scaled(parts: &[Part], scale: f32) -> f32 {
     status_width(parts) * scale
 }
@@ -408,6 +427,36 @@ pub fn stable_order<T>(previous: Vec<T>, current: Vec<T>, same: impl Fn(&T, &T) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// U12 regression: vertical panel capacity must be bounded by monitor HEIGHT, not width.
+    ///
+    /// A 1920×1080 landscape monitor should give many fewer slots on a vertical panel
+    /// (bounded by 1080 height) than a horizontal panel (bounded by 1920 width).
+    /// Before the fix both used 1920, so a vertical panel could list ~38 slots on a
+    /// 1080-high monitor even though only ~21 would fit vertically.
+    #[test]
+    fn vertical_capacity_bounded_by_height_not_width() {
+        let parts = parts(None, true, true);
+        let parts_w = status_width(&parts);
+        // 1920×1080, 96 DPI, default icon size (scale=1.0, layout_scale=1.0)
+        let scale = 1.0_f32;
+        let layout_scale = layout_scale(DEFAULT_APP_ICON_SIZE);
+
+        let horiz = capacity_from_span(1920, scale, layout_scale, parts_w, false);
+        let vert = capacity_from_span(1080, scale, layout_scale, parts_w, false);
+
+        // Horizontal spans more than vertical on a landscape monitor
+        assert!(
+            horiz > vert,
+            "horizontal capacity {horiz} should exceed vertical {vert} on a 1920×1080 monitor"
+        );
+        // Vertical capacity must not exceed what fits in 1080px
+        // With default slot=48dip, pad=8dip: (1080 - 8 - status_w - 2*8 - 9) / 48 ≈ 20
+        assert!(
+            vert <= 25,
+            "vertical panel should admit ≤25 slots on a 1080-high monitor, got {vert}"
+        );
+    }
 
     #[test]
     fn pins_precede_running_apps_without_duplicates() {

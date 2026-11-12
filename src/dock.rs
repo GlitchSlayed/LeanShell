@@ -929,8 +929,17 @@ impl State {
         }
     }
 
+    /// True when the dock is currently oriented vertically — i.e. in Panel mode on a Left or Right
+    /// edge. Dock mode always uses horizontal layout regardless of panel_edge, because the floating
+    /// dock window is always placed at the bottom. Separating this from `panel_edge.is_vertical()`
+    /// prevents an inconsistent state after a mode transition where the edge was left set to Left/Right
+    /// but the mode was switched back to Dock.
+    fn is_effective_vertical(&self) -> bool {
+        self.display_mode == DisplayMode::Panel && self.panel_edge.is_vertical()
+    }
+
     fn app_layout(&self) -> logic::AppLayout {
-        let is_vert = self.panel_edge.is_vertical();
+        let is_vert = self.is_effective_vertical();
         let panel_width = if self.display_mode == DisplayMode::Panel {
             let scale = self.dpi as f32 / 96.0;
             let span = if is_vert { self.height } else { self.width };
@@ -1330,17 +1339,18 @@ impl State {
             }
             let parts = self.parts();
             let layout_scale = logic::layout_scale(self.app_icon_size);
-            let available = (info.rcMonitor.right - info.rcMonitor.left) as f32 / scale
-                - 8.0 * layout_scale
-                - logic::status_width_scaled(&parts, layout_scale)
-                - if !self.pinned.is_empty() && self.items.len() > self.pinned.len() {
-                    logic::separator_width(layout_scale)
-                } else {
-                    0.0
-                };
-            self.capacity = (((available - 2.0 * logic::pad(layout_scale) - logic::separator_width(layout_scale))
-                / logic::slot(layout_scale)) as usize)
-                .saturating_sub(1);
+            // For vertical panels (Left/Right) the main axis is height; for horizontal
+            // (Top/Bottom and all Dock modes) the main axis is width.
+            // Using the wrong axis here let landscape monitors admit far more slots than
+            // the panel's height could display, breaking overflow/scroll behaviour.
+            let mon_span = if self.is_effective_vertical() {
+                info.rcMonitor.bottom - info.rcMonitor.top
+            } else {
+                info.rcMonitor.right - info.rcMonitor.left
+            };
+            let has_divider = !self.pinned.is_empty() && self.items.len() > self.pinned.len();
+            self.capacity =
+                logic::capacity_from_span(mon_span, scale, layout_scale, logic::status_width(&parts), has_divider);
             self.scroll = self.scroll.min(self.items.len().saturating_sub(self.capacity));
             let height = (logic::height(layout_scale) * scale).round() as i32;
             let margin = (logic::margin(layout_scale) * scale).round() as i32;
@@ -1440,7 +1450,7 @@ impl State {
         let layout_scale = logic::layout_scale(self.app_icon_size);
         let thickness = logic::height(layout_scale);
 
-        if self.panel_edge.is_vertical() {
+        if self.is_effective_vertical() {
             let top = self.top + px(main_pos);
             let bottom = top + px(part.width_scaled(layout_scale));
             Some(RECT {
@@ -1478,7 +1488,7 @@ impl State {
         let thickness = logic::height(layout_scale);
         let main_pos = self.app_layout().left(slot, layout_scale);
 
-        if self.panel_edge.is_vertical() {
+        if self.is_effective_vertical() {
             let top = self.top + px(main_pos);
             let bottom = top + px(logic::slot(layout_scale));
             RECT {
