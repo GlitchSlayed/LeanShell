@@ -16,6 +16,7 @@ pub struct Config {
     pub search_url: String,
     pub file_search: bool,
     pub file_search_exclude: Vec<String>,
+    pub file_search_everything: bool,
     pub position: String,
     pub dock: bool,
     pub dock_autohide: bool,
@@ -68,8 +69,13 @@ impl Config {
         choice(&panel_edge, &["bottom", "top", "left", "right"], "panel_edge")?;
         let panel_align = string("panel_align").unwrap_or_else(|_| "center".into());
         choice(&panel_align, &["center", "left"], "panel_align")?;
-        let shell_mode = string("shell_mode").unwrap_or_else(|_| "companion".into());
-        choice(&shell_mode, &["companion", "exclusive"], "shell_mode")?;
+        let raw_shell_mode = string("shell_mode").unwrap_or_else(|_| "exclusive".into());
+        let shell_mode = if raw_shell_mode == "companion" {
+            "exclusive".to_string()
+        } else {
+            raw_shell_mode
+        };
+        choice(&shell_mode, &["exclusive"], "shell_mode")?;
         let watchdog = boolean("watchdog").unwrap_or(true);
         let claim_win_key = boolean("claim_win_key").unwrap_or(true);
         let backend = string("backend").unwrap_or_else(|_| "direct2d".into());
@@ -106,6 +112,7 @@ impl Config {
             search_url: string("search_url")?,
             file_search: boolean("file_search")?,
             file_search_exclude,
+            file_search_everything: boolean("file_search_everything").unwrap_or(true),
             position,
             dock: boolean("dock")?,
             dock_autohide: boolean("dock_autohide")?,
@@ -241,6 +248,7 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         | "show_recent"
         | "file_search"
         | "file_search_exclude"
+        | "file_search_everything"
         | "position"
         | "dock"
         | "dock_autohide"
@@ -258,8 +266,8 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         "panel_align" if !matches!(value.as_str(), Some("center" | "left")) => {
             return Err("panel_align must be center or left.".into());
         }
-        "shell_mode" if !matches!(value.as_str(), Some("companion" | "exclusive")) => {
-            return Err("shell_mode must be companion or exclusive.".into());
+        "shell_mode" if !matches!(value.as_str(), Some("exclusive" | "companion")) => {
+            return Err("shell_mode must be exclusive.".into());
         }
         "watchdog" if value.as_bool().is_none() => {
             return Err("watchdog must be true or false.".into());
@@ -305,7 +313,7 @@ mod tests {
         assert_eq!(config.display_mode, "dock");
         assert_eq!(config.panel_edge, "bottom");
         assert_eq!(config.panel_align, "center");
-        assert_eq!(config.shell_mode, "companion");
+        assert_eq!(config.shell_mode, "exclusive");
         assert!(config.watchdog);
         assert!(config.claim_win_key);
         assert_eq!(Config::from_document(&DEFAULT_CONFIG.parse().unwrap()).unwrap(), config);

@@ -23,7 +23,10 @@ use windows::core::{Error, Result};
 pub const EXTRA_INFO_DUMMY: usize = 0x5749_5350; // "WISP"
 
 /// Custom message sent to the launcher window when bare Win is tapped.
-/// Using WM_APP + 3 (WM_APP_SHOW) directly toggles the launcher.
+/// Using WM_APP + 9 directly toggles the launcher (show if hidden, hide if visible).
+pub const WM_APP_TOGGLE: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 9;
+
+/// Custom message sent to the launcher window when explicitly requested to show.
 pub const WM_APP_SHOW: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 3;
 
 pub use leanshell_core::hook::{HookDecision, WinKeyTracker};
@@ -69,7 +72,7 @@ unsafe extern "system" fn ll_keyboard_proc(n_code: i32, wparam: WPARAM, lparam: 
 
             let target = TARGET_HWND.load(Ordering::Relaxed);
             if target != 0 {
-                let _ = PostMessageW(Some(HWND(target as _)), WM_APP_SHOW, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(Some(HWND(target as _)), WM_APP_TOGGLE, WPARAM(0), LPARAM(0));
             }
         }
 

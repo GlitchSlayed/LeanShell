@@ -182,14 +182,14 @@ export component SettingsWindow inherits Window {
                                 color: #ffffff;
                             }
                             Text {
-                                text: shell_mode == "exclusive" ? "Exclusive Shell: Direct boot, 0% Explorer idle overhead" : "Companion: Runs alongside Windows Explorer";
+                                text: "Exclusive Shell: Direct boot, 0% Explorer idle overhead";
                                 font_size: 12px;
                                 color: #aaaaaa;
                             }
                         }
                         ComboBox {
                             width: 180px;
-                            model: ["companion", "exclusive"];
+                            model: ["exclusive"];
                             current_value: shell_mode;
                             selected(val) => { root.shell_mode_changed(val); }
                         }
@@ -446,11 +446,11 @@ export component SettingsWindow inherits Window {
                                 VerticalLayout {
                                     spacing: 2px;
                                     Text { text: "Shell Mode"; font_size: 14px; color: #ffffff; }
-                                    Text { text: "Companion (hides taskbar) or Exclusive shell"; font_size: 12px; color: #aaaaaa; }
+                                    Text { text: "Exclusive shell replacement (0% idle Explorer overhead)"; font_size: 12px; color: #aaaaaa; }
                                 }
                                 ComboBox {
                                     width: 170px;
-                                    model: ["companion", "exclusive"];
+                                    model: ["exclusive"];
                                     current_value: shell_mode;
                                     selected(val) => { root.shell_mode_changed(val); }
                                 }

@@ -10,6 +10,7 @@
 //! in `%APPDATA%\wisp\surfaces`.
 
 pub mod nav;
+pub mod radios;
 
 use std::path::PathBuf;
 
@@ -19,7 +20,9 @@ use crate::commands::{Command, State, glyph, media, time};
 use crate::search::{Action, Kind, ResultItem};
 use crate::util;
 
-const BUILT_IN: [(&str, &str); 2] = [
+const BUILT_IN: [(&str, &str); 4] = [
+    ("wifi.toml", include_str!("wifi.toml")),
+    ("bluetooth.toml", include_str!("bluetooth.toml")),
     ("now.toml", include_str!("now.toml")),
     ("sound.toml", include_str!("sound.toml")),
 ];
@@ -50,6 +53,8 @@ pub enum Part {
         city: Option<String>,
     },
     Battery,
+    Networks,
+    Devices,
     Wifi,
     Bluetooth,
     /// The default output device's volume.
@@ -127,6 +132,9 @@ pub struct Widget {
     /// Takes the surface's full width instead of half.
     pub wide: bool,
     pub input: Input,
+    pub quiet: bool,
+    pub footer: bool,
+    pub editor: Option<String>,
 }
 
 impl Widget {
@@ -143,6 +151,9 @@ impl Widget {
             icon: None,
             wide,
             input,
+            quiet: false,
+            footer: false,
+            editor: None,
         }
     }
 
@@ -206,6 +217,34 @@ pub struct Library {
     pub specs: Vec<Spec>,
     /// Problems with the user's files, as "name.toml: message".
     pub errors: Vec<String>,
+    source: Option<SourceStamp>,
+}
+
+#[derive(PartialEq)]
+struct SourceStamp {
+    dir: PathBuf,
+    files: Vec<(PathBuf, std::time::SystemTime, u64)>,
+}
+impl SourceStamp {
+    fn read(dir: &std::path::Path) -> Option<Self> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => Some(entries),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return None,
+        };
+        let mut files = Vec::new();
+        if let Some(entries) = entries {
+            for entry in entries {
+                let path = entry.ok()?.path();
+                if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("toml")) {
+                    let metadata = std::fs::metadata(&path).ok()?;
+                    files.push((path, metadata.modified().ok()?, metadata.len()));
+                }
+            }
+        }
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        Some(Self { dir: dir.into(), files })
+    }
 }
 
 impl Library {
@@ -214,6 +253,24 @@ impl Library {
     }
 
     pub fn load() -> Library {
+        Self::load_from(&Self::dir())
+    }
+
+    pub fn reload(&mut self) {
+        self.reload_from(&Self::dir());
+    }
+
+    fn reload_from(&mut self, dir: &std::path::Path) -> bool {
+        let source = SourceStamp::read(dir);
+        if source.is_some() && self.source == source {
+            return false;
+        }
+        *self = Self::load_from(dir);
+        true
+    }
+
+    fn load_from(dir: &std::path::Path) -> Library {
+        let source = SourceStamp::read(dir);
         // Built-ins never change. Parse once, while preserving fresh user-file reads.
         static BUILT_INS: std::sync::OnceLock<Vec<Spec>> = std::sync::OnceLock::new();
         let mut specs = BUILT_INS
@@ -225,7 +282,7 @@ impl Library {
             })
             .clone();
         let mut errors = Vec::new();
-        let mut files: Vec<PathBuf> = std::fs::read_dir(Self::dir())
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
             .map(|dir| dir.filter_map(|entry| Some(entry.ok()?.path())).collect())
             .unwrap_or_default();
         files.retain(|path| path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("toml")));
@@ -245,7 +302,7 @@ impl Library {
                 Err(error) => errors.push(format!("{name}: {error}")),
             }
         }
-        Library { specs, errors }
+        Library { specs, errors, source }
     }
 
     /// Rows for surfaces whose title or keywords start with the query's words.
@@ -297,6 +354,10 @@ pub fn resolve(spec: &Spec, state: &State, filter: &str) -> Vec<Widget> {
         .enumerate()
         .flat_map(|(index, part)| {
             widgets(part, state).into_iter().map(move |mut widget| {
+                if spec.title == "Now" {
+                    widget.quiet = true;
+                    widget.wide = true;
+                }
                 widget.id = match widget.input {
                     Input::Slider {
                         target: Target::App(pid),
@@ -352,6 +413,7 @@ fn checking(label: &str, glyph: &'static str) -> Widget {
 
 fn widgets(part: &Part, state: &State) -> Vec<Widget> {
     match part {
+        Part::Networks | Part::Devices => Vec::new(),
         Part::Clock { city } => clock(city.as_deref()),
         Part::Battery => match state.battery {
             None => vec![checking("Battery", BATTERY)],
@@ -385,9 +447,8 @@ fn widgets(part: &Part, state: &State) -> Vec<Widget> {
                     "Wi-Fi",
                     detail,
                     glyph::WIFI,
-                    Input::Toggle {
-                        on: wifi.on,
-                        command: Command::WifiPower(!wifi.on),
+                    Input::Link {
+                        action: Action::Command(Command::RadioView(true)),
                     },
                 )]
             }
@@ -406,9 +467,8 @@ fn widgets(part: &Part, state: &State) -> Vec<Widget> {
                     "Bluetooth",
                     detail,
                     glyph::BLUETOOTH,
-                    Input::Toggle {
-                        on: bluetooth.on,
-                        command: Command::BluetoothPower(!bluetooth.on),
+                    Input::Link {
+                        action: Action::Command(Command::RadioView(false)),
                     },
                 )]
             }
@@ -531,7 +591,7 @@ fn media_widget(playing: &media::State) -> Widget {
         Input::Buttons {
             buttons: vec![
                 (glyph::PREVIOUS, Command::Media(media::Control::Previous)),
-                (play, Command::Media(media::Control::PlayPause)),
+                (play, Command::Media(media::Control::toggle(playing.playing))),
                 (glyph::NEXT, Command::Media(media::Control::Next)),
             ],
         },
@@ -554,6 +614,11 @@ pub fn apply(command: &Command, state: &mut State) {
             }
             if let (Some(Some(audio)), Some(output)) = (&mut state.audio, state.outputs.iter().find(|o| o.default)) {
                 audio.device = output.name.clone();
+            }
+        }
+        Command::Media(control @ (media::Control::Play | media::Control::Pause)) => {
+            if let Some(Some(media)) = &mut state.media {
+                media.playing = *control == media::Control::Play;
             }
         }
         _ => {}
@@ -676,5 +741,28 @@ mod tests {
         let mut state = state();
         apply(&Command::AppVolume { pid: 7, percent: 20 }, &mut state);
         assert_eq!(state.sessions[0].volume, 20);
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    #[test]
+    fn reloads_on_add_edit_remove_and_folder_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("custom.toml");
+        let mut library = Library::load_from(dir.path());
+        assert!(!library.reload_from(dir.path()));
+        std::fs::write(&path, "invalid").unwrap();
+        assert!(library.reload_from(dir.path()));
+        assert_eq!(library.errors.len(), 1);
+        assert!(!library.reload_from(dir.path()));
+        std::fs::write(&path, "also invalid and a different size").unwrap();
+        assert!(library.reload_from(dir.path()));
+        std::fs::remove_file(path).unwrap();
+        assert!(library.reload_from(dir.path()));
+        assert!(library.errors.is_empty());
+        let other = tempfile::tempdir().unwrap();
+        assert!(library.reload_from(other.path()));
     }
 }

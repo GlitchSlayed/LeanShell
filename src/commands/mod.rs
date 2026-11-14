@@ -5,18 +5,21 @@
 //! launcher keeps the latest state the worker reported and builds results
 //! from it; the worker posts a message when new state arrives.
 
+pub mod appearance;
 pub mod audio;
 pub mod battery;
 pub mod bluetooth;
+pub mod bluetooth_audio;
 pub mod media;
+pub mod night_light;
 pub mod open_windows;
 pub mod power;
-mod radio;
+pub(crate) mod radio;
 pub mod settings;
 pub mod time;
 pub mod wifi;
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
@@ -70,6 +73,12 @@ pub mod glyph {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
+    /// Surface navigation and selection, handled by the launcher.
+    RadioView(bool),
+    RadioSelect(String),
+    NightLight(bool),
+    LightMode(bool),
+    WindowControl(open_windows::Target, open_windows::Control),
     WifiPower(bool),
     WifiConnect(String),
     BluetoothPower(bool),
@@ -88,6 +97,8 @@ pub enum Command {
     Power(Power),
     /// Quits Wisp. The launcher handles it, so the worker never sees it.
     Quit,
+    /// Opens Wisp's own Settings. The launcher handles it too.
+    WispSettings,
 }
 
 impl Command {
@@ -95,7 +106,12 @@ impl Command {
     pub fn stays_open(&self) -> bool {
         !matches!(
             self,
-            Command::WifiConnect(_) | Command::FocusWindow(_) | Command::Power(_) | Command::Quit
+            Command::WifiConnect(_)
+                | Command::FocusWindow(_)
+                | Command::WindowControl(_, _)
+                | Command::Power(_)
+                | Command::Quit
+                | Command::WispSettings
         )
     }
 }
@@ -104,6 +120,8 @@ impl Command {
 /// `Some(None)` if the PC lacks the device (or, for media, nothing plays).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct State {
+    pub night_light: Option<bool>,
+    pub color_modes: Option<[bool; 2]>,
     pub wifi: Option<Option<wifi::State>>,
     pub bluetooth: Option<Option<bluetooth::State>>,
     pub audio: Option<Option<audio::State>>,
@@ -178,6 +196,7 @@ fn worker(requests: Receiver<Request>, events: Sender<Event>, icon_size: i32, no
     };
     let mut icons_sent = HashSet::new();
     let mut ran = 0;
+    let mut night_light_written = 0;
     let mut refresh = |ran: u64| {
         let state = read_state();
         let windows = state.windows.iter().map(|w| (w.icon_key(), &w.exe));
@@ -190,7 +209,9 @@ fn worker(requests: Receiver<Request>, events: Sender<Event>, icon_size: i32, no
             .collect();
         send(Event::State(Box::new(state), icons, ran));
     };
-    while let Ok(first) = requests.recv() {
+    // Requests read ahead while checking for newer toggles; handled first.
+    let mut queued = VecDeque::new();
+    while let Some(first) = queued.pop_front().or_else(|| requests.recv().ok()) {
         // Handle the queued requests, then read the state once. Holding a
         // slider key queues many volume changes.
         let started = Instant::now();
@@ -203,25 +224,41 @@ fn worker(requests: Receiver<Request>, events: Sender<Event>, icon_size: i32, no
                 Request::Refresh => stale = true,
                 Request::List(drill) => send(Event::List(drill, list_items(drill))),
                 Request::Run(command) => {
-                    let result = match &command {
-                        Command::WifiPower(on) => wifi::set_power(*on),
-                        Command::WifiConnect(profile) => wifi::connect(profile),
-                        Command::BluetoothPower(on) => bluetooth::set_power(*on),
-                        Command::Volume(percent) => audio::set_volume(*percent),
-                        Command::Mute(muted) => audio::set_mute(*muted),
-                        Command::AppVolume { pid, percent } => audio::set_app_volume(*pid, *percent),
-                        Command::Output(id) => audio::set_output(id),
-                        Command::Media(control) => media::control(*control),
-                        Command::FocusWindow(hwnd) => open_windows::focus(*hwnd),
-                        Command::CloseWindow(hwnd) => open_windows::close(*hwnd),
-                        Command::Power(power) => power::run(*power),
-                        Command::Quit => Ok(()),
+                    let skipped = superseded(&command, &requests, &mut queued);
+                    let result = if skipped {
+                        Ok(())
+                    } else {
+                        match &command {
+                            Command::NightLight(on) => night_light::set(*on, &mut night_light_written),
+                            Command::LightMode(light) => appearance::set(*light),
+                            Command::WindowControl(target, control) => target.run(*control),
+                            Command::WifiPower(on) => wifi::set_power(*on),
+                            Command::WifiConnect(profile) => wifi::connect(profile),
+                            Command::BluetoothPower(on) => bluetooth::set_power(*on),
+                            Command::Volume(percent) => audio::set_volume(*percent),
+                            Command::Mute(muted) => audio::set_mute(*muted),
+                            Command::AppVolume { pid, percent } => audio::set_app_volume(*pid, *percent),
+                            Command::Output(id) => audio::set_output(id),
+                            Command::Media(control) => media::control(*control),
+                            Command::FocusWindow(hwnd) => open_windows::focus(*hwnd),
+                            Command::CloseWindow(hwnd) => open_windows::close(*hwnd),
+                            Command::Power(power) => power::run(*power),
+                            Command::Quit | Command::WispSettings | Command::RadioView(_) | Command::RadioSelect(_) => {
+                                Ok(())
+                            }
+                        }
                     };
                     if let Err(error) = result {
                         send(Event::Failed(error));
                     }
                     // Apps update their media state and close windows a moment later.
-                    if matches!(command, Command::Media(_) | Command::CloseWindow(_)) {
+                    // Play and pause wait for the app themselves.
+                    if !skipped
+                        && matches!(
+                            command,
+                            Command::Media(media::Control::Next | media::Control::Previous) | Command::CloseWindow(_)
+                        )
+                    {
                         std::thread::sleep(Duration::from_millis(300));
                     }
                     ran += 1;
@@ -229,7 +266,7 @@ fn worker(requests: Receiver<Request>, events: Sender<Event>, icon_size: i32, no
                 }
             }
             if handled < MAX_BATCH && started.elapsed() < MAX_BATCH_TIME {
-                next = requests.try_recv().ok();
+                next = queued.pop_front().or_else(|| requests.try_recv().ok());
             }
         }
         if stale {
@@ -238,8 +275,43 @@ fn worker(requests: Receiver<Request>, events: Sender<Event>, icon_size: i32, no
     }
 }
 
+/// Pressing a toggle repeatedly, or holding a volume key, queues a change per
+/// press, and Windows applies some slowly (radios, theme, Night Light). Each of
+/// these commands sets a value, so only the latest one matters: an earlier one
+/// is skipped when a newer one for the same setting is already waiting.
+fn superseded(command: &Command, requests: &Receiver<Request>, queued: &mut VecDeque<Request>) -> bool {
+    let Some(target) = setting(command) else {
+        return false;
+    };
+    queued.extend(requests.try_iter());
+    queued
+        .iter()
+        .any(|request| matches!(request, Request::Run(newer) if setting(newer) == Some(target)))
+}
+
+/// What a command sets, for commands whose outcome doesn't depend on how many
+/// times they run. Media keys and window actions are left out: each press counts.
+fn setting(command: &Command) -> Option<(std::mem::Discriminant<Command>, u32)> {
+    let pid = match command {
+        Command::AppVolume { pid, .. } => *pid,
+        Command::NightLight(_)
+        | Command::LightMode(_)
+        | Command::WifiPower(_)
+        | Command::BluetoothPower(_)
+        | Command::Volume(_)
+        | Command::Mute(_)
+        | Command::Output(_) => 0,
+        // Play and pause set a state, unlike a play/pause key that flips it.
+        Command::Media(media::Control::Play | media::Control::Pause) => 1,
+        _ => return None,
+    };
+    Some((std::mem::discriminant(command), pid))
+}
+
 fn read_state() -> State {
     State {
+        night_light: night_light::read(),
+        color_modes: appearance::read(),
         wifi: Some(wifi::state()),
         bluetooth: Some(bluetooth::state()),
         audio: Some(audio::state()),
@@ -285,11 +357,13 @@ pub fn search(query: &str, state: &State) -> Vec<ResultItem> {
     }
     let words: Vec<&str> = query.split_whitespace().collect();
     let mut items = Vec::new();
+    items.extend(setting_actions(&query, state));
     items.extend(wifi_items(&words, state.wifi.as_ref()));
     items.extend(bluetooth_items(&words, state.bluetooth.as_ref()));
     items.extend(volume_items(&words, state.audio.as_ref()));
     items.extend(media_items(&words, state.media.as_ref()));
     items.extend(power_items(&query));
+    items.extend(wisp_settings_item(&query));
     items.extend(quit_item(&query));
     items.extend(time_items(&words));
     for (title, link) in settings::find(&query) {
@@ -529,9 +603,25 @@ fn media_items(words: &[&str], state: Option<&Option<media::State>>) -> Vec<Resu
             .glyph(glyph)
             .verb(verb)
     };
+    // One play/pause toggle for whatever is playing, under every name.
+    let status = if media.playing { "Playing" } else { "Paused" };
+    let toggle = row(
+        if media.title.is_empty() {
+            status
+        } else {
+            media.title.as_str()
+        },
+        [media.artist.as_str(), media.app.as_str(), status]
+            .into_iter()
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · "),
+        Action::Command(Command::Media(Control::toggle(media.playing))),
+    )
+    .glyph(if media.playing { glyph::PAUSE } else { glyph::PLAY })
+    .verb(if media.playing { "Pause" } else { "Play" });
     match *name {
-        "play" | "resume" => vec![control("Play", Control::Play, glyph::PLAY, "Play")],
-        "pause" => vec![control("Pause", Control::Pause, glyph::PAUSE, "Pause")],
+        "play" | "resume" | "pause" => vec![toggle],
         "next" | "skip" => vec![control("Next track", Control::Next, glyph::NEXT, "Next")],
         "previous" | "prev" => vec![control(
             "Previous track",
@@ -539,53 +629,30 @@ fn media_items(words: &[&str], state: Option<&Option<media::State>>) -> Vec<Resu
             glyph::PREVIOUS,
             "Previous",
         )],
-        "media" | "music" => {
-            let status = if media.playing { "Playing" } else { "Paused" };
-            vec![
-                row(
-                    if media.title.is_empty() {
-                        status
-                    } else {
-                        media.title.as_str()
-                    },
-                    [media.artist.as_str(), media.app.as_str(), status]
-                        .into_iter()
-                        .filter(|p| !p.is_empty())
-                        .collect::<Vec<_>>()
-                        .join(" · "),
-                    Action::Command(Command::Media(Control::PlayPause)),
-                )
-                .glyph(if media.playing { glyph::PAUSE } else { glyph::PLAY })
-                .verb(if media.playing { "Pause" } else { "Play" }),
-                control("Next track", Control::Next, glyph::NEXT, "Next"),
-                control("Previous track", Control::Previous, glyph::PREVIOUS, "Previous"),
-            ]
-        }
+        "media" | "music" => vec![
+            toggle,
+            control("Next track", Control::Next, glyph::NEXT, "Next"),
+            control("Previous track", Control::Previous, glyph::PREVIOUS, "Previous"),
+        ],
         _ => Vec::new(),
     }
 }
 
 fn power_items(query: &str) -> Vec<ResultItem> {
-    if query == "power" || query == "power menu" {
-        return Power::ALL
-            .into_iter()
-            .map(|p| {
-                let subtitle = if p.needs_confirmation() {
-                    format!("{} · Press Enter twice", p.description())
-                } else {
-                    p.description().to_string()
-                };
-                row(p.title(), subtitle, Action::Command(Command::Power(p)))
-                    .glyph(p.glyph())
-                    .verb(p.title())
-            })
-            .collect();
-    }
+    let asks_hibernate = Power::Hibernate
+        .keywords()
+        .iter()
+        .any(|keyword| keyword.starts_with(query));
+    power_items_with_capability(query, asks_hibernate && power::can_hibernate())
+}
+
+fn power_items_with_capability(query: &str, can_hibernate: bool) -> Vec<ResultItem> {
     if query.chars().count() < 3 {
         return Vec::new();
     }
     Power::ALL
         .into_iter()
+        .filter(|p| *p != Power::Hibernate || can_hibernate)
         .filter(|p| p.keywords().iter().any(|keyword| keyword.starts_with(query)))
         .map(|p| {
             let subtitle = if p.needs_confirmation() {
@@ -598,6 +665,32 @@ fn power_items(query: &str) -> Vec<ResultItem> {
                 .verb(p.title())
         })
         .collect()
+}
+
+/// Wisp's own Settings, for `wisp`, `settings` or `wisp settings`, so they
+/// don't need the tray icon, which is hidden with the taskbar.
+fn wisp_settings_item(query: &str) -> Option<ResultItem> {
+    let name = crate::channel::NAME.to_lowercase();
+    let matches = query.chars().count() >= 3
+        && [
+            "wisp",
+            "wisp settings",
+            "settings",
+            "preferences",
+            &name,
+            &format!("{name} settings"),
+        ]
+        .iter()
+        .any(|keyword| keyword.starts_with(query));
+    matches.then(|| {
+        row(
+            format!("{} Settings", crate::channel::NAME),
+            "Theme, shortcut, dock and more",
+            Action::Command(Command::WispSettings),
+        )
+        .glyph(glyph::SETTINGS)
+        .verb("Open")
+    })
 }
 
 /// The tray icon is hidden with the taskbar, so the launcher offers Quit too.
@@ -843,6 +936,76 @@ fn output_items(outputs: Result<Vec<audio::Output>, String>) -> Vec<ResultItem> 
     }
 }
 
+pub fn radio_on_bluetooth() -> bool {
+    radio::is_on(windows::Devices::Radios::RadioKind::Bluetooth).unwrap_or(false)
+}
+
+fn setting_actions(query: &str, state: &State) -> Vec<ResultItem> {
+    let mut items = Vec::new();
+    if query.len() >= 3 {
+        for keyword in ["night light", "nightlight", "blue light"] {
+            let target = if keyword.starts_with(query) {
+                state.night_light.map(|on| !on)
+            } else if query == format!("{keyword} on") {
+                state.night_light.map(|_| true)
+            } else if query == format!("{keyword} off") {
+                state.night_light.map(|_| false)
+            } else {
+                None
+            };
+            if let (Some(target), Some(on)) = (target, state.night_light) {
+                items.push(
+                    row(
+                        if target {
+                            "Turn Night Light on"
+                        } else {
+                            "Turn Night Light off"
+                        },
+                        if on { "Night Light is on" } else { "Night Light is off" },
+                        Action::Command(Command::NightLight(target)),
+                    )
+                    .glyph(glyph::SETTINGS),
+                );
+                break;
+            }
+        }
+        // One toggle: any of these names offers the mode that isn't on now.
+        if let Some(modes) = state.color_modes
+            && [
+                "theme",
+                "toggle theme",
+                "switch theme",
+                "dark mode",
+                "light mode",
+                "color mode",
+                "colour mode",
+            ]
+            .iter()
+            .any(|keyword| keyword.starts_with(query))
+        {
+            let light = !modes[0];
+            let current = match modes {
+                [true, true] => "Light mode is on",
+                [false, false] => "Dark mode is on",
+                _ => "Mixed app and system modes",
+            };
+            items.push(
+                row(
+                    if light {
+                        "Switch to light mode"
+                    } else {
+                        "Switch to dark mode"
+                    },
+                    current,
+                    Action::Command(Command::LightMode(light)),
+                )
+                .glyph(glyph::SETTINGS),
+            );
+        }
+    }
+    items
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -850,6 +1013,7 @@ mod tests {
     fn ready() -> State {
         State {
             wifi: Some(Some(wifi::State {
+                signal: None,
                 on: true,
                 network: Some("Home".into()),
             })),
@@ -925,7 +1089,9 @@ mod tests {
     #[test]
     fn controls_media_only_while_something_plays() {
         let state = ready();
-        assert_eq!(titles("pause", &state), ["Pause"]);
+        // Play, resume and pause all offer the same toggle as "media".
+        assert_eq!(titles("pause", &state), ["Song"]);
+        assert_eq!(titles("play", &state), titles("music", &state)[..1]);
         assert_eq!(search("next", &state)[0].subtitle, "Song · Band · Spotify");
         assert_eq!(titles("music", &state)[0], "Song");
         let idle = State {
@@ -942,8 +1108,26 @@ mod tests {
         assert_eq!(titles("restart", &state), ["Restart"]);
         assert_eq!(titles("shut", &state), ["Shut down"]);
         assert!(titles("re", &state).is_empty());
-        assert_eq!(titles("quit", &state), ["Quit LeanShell"]);
-        assert_eq!(titles("exit le", &state), ["Quit LeanShell"]);
+        let quit = format!("Quit {}", crate::channel::NAME);
+        assert_eq!(titles("quit", &state), [quit.as_str()]);
+        let exit_query = format!("exit {}", &crate::channel::NAME.to_lowercase()[..2]);
+        assert_eq!(titles(&exit_query, &state), [quit.as_str()]);
+        let settings = format!("{} Settings", crate::channel::NAME);
+        let name_lower = crate::channel::NAME.to_lowercase();
+        let name_prefix = &name_lower[..3.min(name_lower.len())];
+        for query in [
+            name_lower.as_str(),
+            name_prefix,
+            &format!("{name_lower} settings"),
+            &format!("{name_lower} set"),
+            "settings",
+            "sett",
+            "preferences",
+        ] {
+            assert!(titles(query, &state).contains(&settings), "{query}");
+        }
+        assert!(!titles("se", &state).contains(&settings));
+        assert!(!titles("wifi", &state).contains(&settings));
         assert_eq!(search("lock", &state)[0].subtitle, "Locks the PC");
         assert_eq!(
             search("restart", &state)[0].subtitle,
@@ -957,6 +1141,28 @@ mod tests {
         // The Bluetooth command already links to its settings page, so the
         // matching Settings page is not listed again.
         assert_eq!(titles("bluetooth", &state), ["Bluetooth · Off", "Bluetooth settings"]);
+    }
+
+    #[test]
+    fn hibernate_keywords_only_match_when_capable() {
+        for query in ["hib", "hiber", "hibernate", "hibernation"] {
+            let items = power_items_with_capability(query, true);
+            assert_eq!(items.len(), 1, "{query}");
+            assert_eq!(items[0].title, "Hibernate");
+            assert_eq!(items[0].subtitle, "Saves your session and turns off the PC");
+            assert!(matches!(
+                items[0].action,
+                Action::Command(Command::Power(Power::Hibernate))
+            ));
+            assert!(!Command::Power(Power::Hibernate).stays_open());
+            assert!(power_items_with_capability(query, false).is_empty(), "{query}");
+        }
+        assert!(power_items_with_capability("hi", true).is_empty());
+        assert!(power_items_with_capability("hibernate please", true).is_empty());
+        assert_eq!(power_items_with_capability("sleep", false)[0].title, "Sleep");
+        assert!(!Power::Hibernate.needs_confirmation());
+        assert!(Power::ShutDown.needs_confirmation());
+        assert!(Power::Restart.needs_confirmation());
     }
 
     #[test]
@@ -1002,5 +1208,119 @@ mod tests {
             network_items(state.wifi.as_ref(), None)[0].title,
             "Looking for networks…"
         );
+    }
+}
+
+#[cfg(test)]
+mod system_action_tests {
+    use super::*;
+    #[test]
+    fn night_light_keeps_settings_and_hides_unreadable_toggle() {
+        let mut state = State::default();
+        assert!(
+            search("night light", &state)
+                .iter()
+                .all(|i| !matches!(i.action, Action::Command(Command::NightLight(_))))
+        );
+        assert!(
+            search("night light", &state)
+                .iter()
+                .any(|i| matches!(&i.action, Action::Open(uri) if uri == "ms-settings:nightlight"))
+        );
+        for on in [false, true] {
+            state.night_light = Some(on);
+            let rows = search("night light", &state);
+            assert_eq!(
+                rows[0].title,
+                if on {
+                    "Turn Night Light off"
+                } else {
+                    "Turn Night Light on"
+                }
+            );
+            assert!(matches!(rows[0].action, Action::Command(Command::NightLight(target)) if target != on));
+            assert!(matches!(
+                search("night light off", &state)[0].action,
+                Action::Command(Command::NightLight(false))
+            ));
+        }
+        assert!(
+            search("night light nonsense", &state)
+                .iter()
+                .all(|i| !matches!(i.action, Action::Command(Command::NightLight(_))))
+        );
+    }
+    #[test]
+    fn only_the_latest_toggle_of_a_kind_runs() {
+        let (send, requests) = channel();
+        let mut queued = VecDeque::new();
+        send.send(Request::Run(Command::NightLight(true))).unwrap();
+        send.send(Request::Run(Command::LightMode(true))).unwrap();
+        // A newer theme request is waiting: skip this one.
+        assert!(superseded(&Command::LightMode(false), &requests, &mut queued));
+        // The waiting requests stay queued, in order.
+        assert_eq!(queued.len(), 2);
+        let Some(Request::Run(Command::NightLight(_))) = queued.pop_front() else {
+            panic!("order changed")
+        };
+        assert!(!superseded(&Command::NightLight(true), &requests, &mut queued));
+        queued.pop_front();
+        assert!(!superseded(&Command::LightMode(true), &requests, &mut queued));
+        // Radios, volume and mute: the latest press wins too.
+        queued.clear();
+        send.send(Request::Run(Command::BluetoothPower(false))).unwrap();
+        assert!(superseded(&Command::BluetoothPower(true), &requests, &mut queued));
+        assert!(!superseded(&Command::WifiPower(true), &requests, &mut queued));
+        // Per-app volume only replaces the same app.
+        queued.clear();
+        send.send(Request::Run(Command::AppVolume { pid: 7, percent: 30 }))
+            .unwrap();
+        assert!(!superseded(
+            &Command::AppVolume { pid: 8, percent: 50 },
+            &requests,
+            &mut queued
+        ));
+        assert!(superseded(
+            &Command::AppVolume { pid: 7, percent: 50 },
+            &requests,
+            &mut queued
+        ));
+        // Play and pause replace each other; track skips count every press.
+        queued.clear();
+        send.send(Request::Run(Command::Media(media::Control::Pause))).unwrap();
+        assert!(superseded(
+            &Command::Media(media::Control::Play),
+            &requests,
+            &mut queued
+        ));
+        queued.clear();
+        send.send(Request::Run(Command::Media(media::Control::Next))).unwrap();
+        assert!(!superseded(
+            &Command::Media(media::Control::Next),
+            &requests,
+            &mut queued
+        ));
+    }
+    #[test]
+    fn color_mode_is_one_toggle_under_every_name() {
+        for (modes, light, subtitle) in [
+            ([true, true], false, "Light mode is on"),
+            ([false, false], true, "Dark mode is on"),
+            ([true, false], false, "Mixed app and system modes"),
+        ] {
+            let state = State {
+                color_modes: Some(modes),
+                ..State::default()
+            };
+            for query in ["theme", "dark", "dark mode", "light mode", "toggle theme"] {
+                let rows: Vec<_> = search(query, &state)
+                    .into_iter()
+                    .filter(|i| matches!(i.action, Action::Command(Command::LightMode(_))))
+                    .collect();
+                assert_eq!(rows.len(), 1, "{query}");
+                assert!(matches!(rows[0].action, Action::Command(Command::LightMode(target)) if target == light));
+                assert_eq!(rows[0].subtitle, subtitle);
+            }
+        }
     }
 }

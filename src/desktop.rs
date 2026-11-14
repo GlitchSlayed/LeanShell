@@ -1,13 +1,18 @@
 //! Minimal Win32 desktop background window for exclusive shell mode.
 //!
 //! Spans the virtual desktop at `HWND_BOTTOM`, paints the user's active
-//! desktop wallpaper using `PaintDesktop`, and hosts a right-click desktop menu.
+//! desktop wallpaper image (or falls back to `PaintDesktop`), and hosts a
+//! right-click desktop menu.
+
+use std::cell::Cell;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::Com::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{PCWSTR, Result, w};
+use windows::core::{HSTRING, PCWSTR, Result, w};
 
 const DESKTOP_CLASS: PCWSTR = w!("LeanShellDesktop");
 
@@ -16,6 +21,84 @@ const IDM_EXPLORER: usize = 1002;
 const IDM_TERMINAL: usize = 1003;
 const IDM_DISPLAY: usize = 1004;
 const IDM_RESTORE: usize = 1005;
+
+thread_local! {
+    static CACHED_WALLPAPER: Cell<Option<HBITMAP>> = const { Cell::new(None) };
+}
+
+fn reload_wallpaper(cx: i32, cy: i32) {
+    CACHED_WALLPAPER.with(|cell| {
+        if let Some(old) = cell.get() {
+            // SAFETY: Deleting old wallpaper bitmap
+            unsafe {
+                let _ = DeleteObject(old.into());
+            }
+            cell.set(None);
+        }
+        cell.set(load_wallpaper_bitmap(cx, cy));
+    });
+}
+
+fn clear_wallpaper() {
+    CACHED_WALLPAPER.with(|cell| {
+        if let Some(old) = cell.get() {
+            // SAFETY: Deleting wallpaper bitmap
+            unsafe {
+                let _ = DeleteObject(old.into());
+            }
+            cell.set(None);
+        }
+    });
+}
+
+fn load_wallpaper_bitmap(cx: i32, cy: i32) -> Option<HBITMAP> {
+    let path = get_wallpaper_path()?;
+    // SAFETY: Creating IShellItemImageFactory to decode image to HBITMAP
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&HSTRING::from(path.as_str()), None).ok()?;
+        factory
+            .GetImage(
+                SIZE {
+                    cx: cx.max(1),
+                    cy: cy.max(1),
+                },
+                SIIGBF_SCALEUP | SIIGBF_RESIZETOFIT,
+            )
+            .ok()
+    }
+}
+
+fn get_wallpaper_path() -> Option<String> {
+    // 1. Try SPI_GETDESKWALLPAPER
+    let mut buf = [0u16; 260];
+    // SAFETY: Querying desktop wallpaper path from system
+    let res = unsafe {
+        SystemParametersInfoW(
+            SPI_GETDESKWALLPAPER,
+            buf.len() as u32,
+            Some(buf.as_mut_ptr() as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    if res.is_ok() {
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        let s = String::from_utf16_lossy(&buf[..len]);
+        if !s.is_empty() && std::path::Path::new(&s).exists() {
+            return Some(s);
+        }
+    }
+
+    // 2. Try %APPDATA%\Microsoft\Windows\Themes\TranscodedWallpaper
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let transcoded = format!(r"{appdata}\Microsoft\Windows\Themes\TranscodedWallpaper");
+        if std::path::Path::new(&transcoded).exists() {
+            return Some(transcoded);
+        }
+    }
+
+    None
+}
 
 pub struct DesktopWindow {
     hwnd: HWND,
@@ -68,6 +151,8 @@ impl DesktopWindow {
             let _ = SetWindowPos(hwnd, Some(HWND_BOTTOM), x, y, cx, cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
 
+        reload_wallpaper(cx, cy);
+
         Ok(Self { hwnd })
     }
 
@@ -79,6 +164,7 @@ impl DesktopWindow {
 
 impl Drop for DesktopWindow {
     fn drop(&mut self) {
+        clear_wallpaper();
         if !self.hwnd.0.is_null() {
             unsafe {
                 let _ = DestroyWindow(self.hwnd);
@@ -95,28 +181,63 @@ unsafe extern "system" fn desktop_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(hwnd, &mut ps);
                 if !hdc.0.is_null() {
-                    let _ = PaintDesktop(hdc);
+                    let mut painted = false;
+                    CACHED_WALLPAPER.with(|cell| {
+                        if let Some(bitmap) = cell.get() {
+                            let mem_dc = CreateCompatibleDC(Some(hdc));
+                            if !mem_dc.0.is_null() {
+                                let old = SelectObject(mem_dc, bitmap.into());
+                                let mut bm = BITMAP::default();
+                                GetObjectW(
+                                    bitmap.into(),
+                                    size_of::<BITMAP>() as i32,
+                                    Some((&mut bm as *mut BITMAP).cast()),
+                                );
+                                SetStretchBltMode(hdc, HALFTONE);
+                                let _ = SetBrushOrgEx(hdc, 0, 0, None);
+                                let mut client = RECT::default();
+                                let _ = GetClientRect(hwnd, &mut client);
+                                let _ = StretchBlt(
+                                    hdc,
+                                    0,
+                                    0,
+                                    client.right - client.left,
+                                    client.bottom - client.top,
+                                    Some(mem_dc),
+                                    0,
+                                    0,
+                                    bm.bmWidth,
+                                    bm.bmHeight,
+                                    SRCCOPY,
+                                );
+                                SelectObject(mem_dc, old);
+                                let _ = DeleteDC(mem_dc);
+                                painted = true;
+                            }
+                        }
+                    });
+                    if !painted {
+                        let _ = PaintDesktop(hdc);
+                    }
                     let _ = EndPaint(hwnd, &ps);
                 }
                 LRESULT(0)
             }
-            WM_ERASEBKGND => {
-                let hdc = HDC(wparam.0 as *mut _);
-                if !hdc.0.is_null() {
-                    let _ = PaintDesktop(hdc);
-                }
-                LRESULT(1)
-            }
+            WM_ERASEBKGND => LRESULT(1),
             WM_DISPLAYCHANGE => {
                 let x = GetSystemMetrics(SM_XVIRTUALSCREEN);
                 let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
                 let cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
                 let cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
                 let _ = SetWindowPos(hwnd, Some(HWND_BOTTOM), x, y, cx, cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                reload_wallpaper(cx, cy);
                 let _ = InvalidateRect(Some(hwnd), None, true);
                 LRESULT(0)
             }
             WM_SETTINGCHANGE => {
+                let cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                let cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                reload_wallpaper(cx, cy);
                 let _ = InvalidateRect(Some(hwnd), None, true);
                 LRESULT(0)
             }
@@ -163,6 +284,22 @@ unsafe extern "system" fn desktop_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
                 LRESULT(0)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_wallpaper_bitmap() {
+        let bmp = load_wallpaper_bitmap(800, 600);
+        println!("load_wallpaper_bitmap: {:?}", bmp.is_some());
+        if let Some(bmp) = bmp {
+            unsafe {
+                let _ = DeleteObject(bmp.into());
+            }
         }
     }
 }

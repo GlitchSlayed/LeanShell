@@ -247,11 +247,18 @@ impl NameMatcher {
     /// Scores `text` against `pattern`. Returns `None` for no match or a
     /// scattered match; otherwise the score and the UTF-16 highlight ranges.
     pub fn score(&mut self, pattern: &Pattern, text: &str) -> Option<(u32, Vec<(u32, u32)>)> {
+        self.score_words(pattern, text, 1)
+    }
+
+    /// Like [`NameMatcher::score`], but each of `words` query words may match
+    /// inside a word once, as file names often hide words mid-word
+    /// (`2024 report` in `Q32024_bugreporting.pdf`).
+    pub fn score_words(&mut self, pattern: &Pattern, text: &str, words: usize) -> Option<(u32, Vec<(u32, u32)>)> {
         self.indices.clear();
         let score = pattern.indices(haystack(text, &mut self.buf), &mut self.matcher, &mut self.indices)?;
         self.indices.sort_unstable();
         self.indices.dedup();
-        is_clean_match(text, &self.indices).then(|| (score, utf16_ranges(text, &self.indices)))
+        is_clean_match(text, &self.indices, words.max(1)).then(|| (score, utf16_ranges(text, &self.indices)))
     }
 }
 
@@ -336,7 +343,23 @@ impl Searcher {
         let mut scored: Vec<_> = apps
             .iter()
             .filter_map(|app| {
-                let (score, highlights) = self.names.score(&pattern, &app.name)?;
+                let name_match = self.names.score(&pattern, &app.name);
+                let (score, highlights) = if let Some(m) = name_match {
+                    m
+                } else {
+                    let alt_id = app
+                        .path
+                        .as_deref()
+                        .and_then(|p| p.rsplit(['\\', '/']).next())
+                        .or_else(|| {
+                            let after_dot = app.id.rsplit('.').next().unwrap_or(&app.id);
+                            let before_bang = after_dot.split('!').next().unwrap_or(after_dot);
+                            let before_hash = before_bang.split('_').next().unwrap_or(before_bang);
+                            Some(before_hash)
+                        });
+                    let (alt_score, _) = alt_id.and_then(|alt| self.names.score(&pattern, alt))?;
+                    (alt_score.saturating_sub(10), Vec::new())
+                };
                 let prefix = if app.name.to_lowercase().starts_with(&lower) {
                     40
                 } else {
@@ -396,9 +419,9 @@ fn haystack<'a>(text: &'a str, buf: &'a mut Vec<char>) -> Utf32Str<'a> {
     }
 }
 
-/// Allows at most one group of consecutive matched characters to start within
-/// a word. Accepts `vsc` for Visual Studio Code; rejects `code` for Recorder.
-fn is_clean_match(text: &str, char_indices: &[u32]) -> bool {
+/// Allows at most `allowed` groups of consecutive matched characters to start
+/// within a word. Accepts `vsc` for Visual Studio Code; rejects `code` for Recorder.
+fn is_clean_match(text: &str, char_indices: &[u32], allowed: usize) -> bool {
     let chars: Vec<char> = text.chars().collect();
     let word_start = |i: usize| {
         i == 0 || !chars[i - 1].is_alphanumeric() || (chars[i - 1].is_lowercase() && chars[i].is_uppercase())
@@ -409,7 +432,7 @@ fn is_clean_match(text: &str, char_indices: &[u32]) -> bool {
         .filter(|&(n, &i)| n == 0 || char_indices[n - 1] + 1 != i)
         .filter(|&(_, &i)| !word_start(i as usize))
         .count();
-    mid_word_runs <= 1
+    mid_word_runs <= allowed
 }
 
 /// DirectWrite needs UTF-16 ranges rather than the matcher's `char` indices.
@@ -586,5 +609,27 @@ mod tests {
         assert_eq!(url_encode("a b&c"), "a+b%26c");
         assert_eq!(host("https://www.google.com/search?q={query}"), Some("www.google.com"));
         assert_eq!(utf16_ranges("a🎉bc", &[0, 2, 3]), vec![(0, 1), (3, 2)]);
+    }
+
+    #[test]
+    fn matches_ms_store_and_executable_aliases() {
+        let apps = [
+            AppEntry {
+                name: "Command Prompt".into(),
+                id: r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\cmd.exe".into(),
+                path: Some(r"C:\WINDOWS\system32\cmd.exe".into()),
+            },
+            AppEntry {
+                name: "Calculator".into(),
+                id: "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".into(),
+                path: None,
+            },
+        ];
+        let mut searcher = Searcher::new();
+        let (h, c) = (History::default(), Config::default());
+        let res = searcher.search("cmd", &apps, &h, &c);
+        assert!(res.iter().any(|r| r.title == "Command Prompt"));
+        let res = searcher.search("WindowsCalculator", &apps, &h, &c);
+        assert!(res.iter().any(|r| r.title == "Calculator"));
     }
 }

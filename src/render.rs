@@ -270,6 +270,12 @@ impl Renderer {
         }
     }
 
+    pub fn clear_icons(&mut self) {
+        if let Some(target) = &mut self.target {
+            target.bitmaps.clear();
+        }
+    }
+
     pub fn draw(
         &mut self,
         hwnd: HWND,

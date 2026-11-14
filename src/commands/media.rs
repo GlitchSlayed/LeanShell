@@ -8,7 +8,6 @@ use windows::Media::Control::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {
-    PlayPause,
     Play,
     Pause,
     Next,
@@ -22,6 +21,14 @@ pub struct State {
     /// The app that plays, such as "Spotify".
     pub app: String,
     pub playing: bool,
+}
+
+impl Control {
+    /// The button for media in this state: pause while playing, otherwise play.
+    /// Setting a state, rather than flipping it, makes repeated presses safe to collapse.
+    pub fn toggle(playing: bool) -> Self {
+        if playing { Self::Pause } else { Self::Play }
+    }
 }
 
 fn session() -> windows::core::Result<Session> {
@@ -46,15 +53,40 @@ pub fn state() -> Option<State> {
 
 pub fn control(control: Control) -> Result<(), String> {
     let session = session().map_err(|_| "Nothing is playing.".to_string())?;
+    let playing = || {
+        session
+            .GetPlaybackInfo()
+            .and_then(|info| info.PlaybackStatus())
+            .is_ok_and(|status| status == Status::Playing)
+    };
+    let target = match control {
+        Control::Play => Some(true),
+        Control::Pause => Some(false),
+        Control::Next | Control::Previous => None,
+    };
+    if target == Some(playing()) {
+        return Ok(());
+    }
     let request = match control {
-        Control::PlayPause => session.TryTogglePlayPauseAsync(),
         Control::Play => session.TryPlayAsync(),
         Control::Pause => session.TryPauseAsync(),
         Control::Next => session.TrySkipNextAsync(),
         Control::Previous => session.TrySkipPreviousAsync(),
     };
     match request.and_then(|op| op.join()) {
-        Ok(true) => Ok(()),
+        Ok(true) => {
+            // Browsers report the new state a moment later. Wait for it, so the
+            // launcher reads it and the next press asks for the right thing.
+            if let Some(target) = target {
+                for _ in 0..30 {
+                    if playing() == target {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+            Ok(())
+        }
         Ok(false) => Err("The app that is playing did not accept the request.".into()),
         Err(error) => Err(error.message()),
     }

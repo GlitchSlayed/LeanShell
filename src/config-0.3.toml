@@ -5,7 +5,7 @@
 position = "center"
 dock = false
 hide_taskbar = false
-shell_mode = "companion"
+shell_mode = "exclusive"
 display_mode = "dock"
 panel_edge = "bottom"
 panel_align = "center"

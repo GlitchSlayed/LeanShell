@@ -119,12 +119,17 @@ unsafe fn enumerate_apps() -> Result<Vec<(AppEntry, IShellItem)>> {
                 break;
             }
             let Some(item) = slot[0].take() else { break };
-            let (Some(name), Some(id)) = (
-                display_name(&item, SIGDN_NORMALDISPLAY),
-                display_name(&item, SIGDN_PARENTRELATIVEPARSING),
-            ) else {
+            let Some(name) = display_name(&item, SIGDN_NORMALDISPLAY) else {
                 continue;
             };
+            let id = display_name(&item, SIGDN_PARENTRELATIVEPARSING)
+                .or_else(|| display_name(&item, SIGDN_DESKTOPABSOLUTEPARSING));
+            let Some(mut id) = id else {
+                continue;
+            };
+            if id.starts_with(r"shell:AppsFolder\") {
+                id = id.strip_prefix(r"shell:AppsFolder\").unwrap().to_string();
+            }
             if !is_launchable(&name, &id) || !seen.insert(id.clone()) {
                 continue;
             }
@@ -245,5 +250,19 @@ unsafe fn bitmap_pixels(bitmap: HBITMAP) -> Option<IconPixels> {
             height: height as u32,
             bgra,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_enumerate_apps_finds_apps() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let apps = enumerate_apps().expect("failed to enumerate apps");
+            assert!(!apps.is_empty(), "expected to find apps in shell:AppsFolder");
+        }
     }
 }

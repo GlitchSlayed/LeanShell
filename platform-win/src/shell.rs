@@ -77,14 +77,24 @@ pub fn is_session_exclusive() -> bool {
     // SAFETY: Querying Windows desktop shell window
     unsafe {
         let shell_hwnd = GetShellWindow();
-        if shell_hwnd.is_invalid() {
-            // No desktop shell window exists -> we are in an exclusive session!
-            return true;
+        if !shell_hwnd.is_invalid() {
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(shell_hwnd, Some(&mut pid));
+            return pid == std::process::id();
         }
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(shell_hwnd, Some(&mut pid));
-        // If the shell window belongs to our process, we are the shell!
-        pid == 0 || pid == std::process::id()
+        // If GetShellWindow() is invalid, check if Explorer's Progman or Shell_TrayWnd exists
+        for class in [w!("Progman"), w!("Shell_TrayWnd")] {
+            if let Ok(hwnd) = windows::Win32::UI::WindowsAndMessaging::FindWindowW(class, None)
+                && !hwnd.is_invalid()
+            {
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                if pid != 0 && pid != std::process::id() {
+                    return false;
+                }
+            }
+        }
+        is_exclusive_shell_registered()
     }
 }
 

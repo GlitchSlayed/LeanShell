@@ -42,13 +42,24 @@ pub enum WindowListMode {
     Off,
 }
 
-/// Shell mode: running alongside Windows ("companion") or exclusive shell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
+/// Shell mode: LeanShell is an exclusive Windows shell replacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShellMode {
     #[default]
-    Companion,
     Exclusive,
+}
+
+impl<'de> serde::Deserialize<'de> for ShellMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.to_lowercase().as_str() {
+            "exclusive" | "companion" => Ok(ShellMode::Exclusive),
+            other => Err(serde::de::Error::unknown_variant(other, &["exclusive"])),
+        }
+    }
 }
 
 /// Layout and shell presentation modes.
@@ -126,6 +137,8 @@ pub struct Config {
     pub search_url: String,
     pub file_search: bool,
     pub file_search_exclude: Vec<String>,
+    #[serde(default = "default_true")]
+    pub file_search_everything: bool,
     pub window_list: WindowListMode,
     #[serde(default)]
     pub shell_mode: ShellMode,
@@ -228,7 +241,7 @@ mod tests {
         assert!(default.dock && default.hide_taskbar);
         assert_eq!(default.dock_icon_size, 32);
         assert_eq!(default.position, Position::Bottom);
-        assert_eq!(default.shell_mode, ShellMode::Companion);
+        assert_eq!(default.shell_mode, ShellMode::Exclusive);
         assert!(default.watchdog);
         assert!(Config::parse("dock = \"yes\"").is_err());
     }
@@ -238,6 +251,10 @@ mod tests {
         let config = Config::parse("shell_mode = \"exclusive\"\nwatchdog = false").unwrap();
         assert_eq!(config.shell_mode, ShellMode::Exclusive);
         assert!(!config.watchdog);
+
+        // Legacy companion config value automatically maps to exclusive
+        let legacy = Config::parse("shell_mode = \"companion\"").unwrap();
+        assert_eq!(legacy.shell_mode, ShellMode::Exclusive);
     }
 
     #[test]

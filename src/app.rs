@@ -24,7 +24,7 @@ use crate::config::{self, Config, DisplayMode, PanelEdge, Position, Theme};
 use crate::dock::space::DockSpace;
 use crate::dock::{self, Dock};
 use crate::drag::{self, Payload};
-use crate::files::{FileResults, FileSearch};
+use crate::files::{self, FileResults, FileSearch};
 use crate::history::History;
 use crate::indexer::{AppEntry, IconPixels, IndexEvent, Indexer};
 use crate::render::{Frame, Renderer, SurfaceFrame, layout};
@@ -39,6 +39,7 @@ const WM_APP_FRAME: u32 = WM_APP + 8;
 const WM_APP_INDEX: u32 = WM_APP + 2;
 const WM_APP_FILES: u32 = WM_APP + 5;
 const WM_APP_SHOW: u32 = WM_APP + 3;
+const WM_APP_TOGGLE: u32 = WM_APP + 9;
 const WM_APP_QUIT: u32 = WM_APP + 4;
 /// wisp-settings posts this message after it changes the config.
 const WM_APP_RELOAD: u32 = WM_APP + 6;
@@ -63,7 +64,7 @@ const TASKBAR_ATTEMPTS: u32 = 5;
 /// File results shown after apps, and for a query that starts with `?`.
 const MIXED_FILE_RESULTS: usize = 5;
 const ONLY_FILE_RESULTS: usize = 30;
-const RESCAN_AFTER: Duration = Duration::from_secs(120);
+const RESCAN_AFTER: Duration = Duration::from_secs(30);
 const PLACEHOLDER: &str = "Search apps and files, or try wifi, vol, time";
 /// Space below the launcher at the bottom of the screen, in DIPs. Matches the
 /// dock's margin so the query box covers the dock.
@@ -150,13 +151,14 @@ pub fn run() -> Result<()> {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ole = drag::Ole::new()?;
+        let _radio_runtime = commands::radio::UiRuntime::new()?;
 
         // The mutex limits Wisp to one running instance.
         let _mutex = CreateMutexW(None, true, crate::channel::INSTANCE_MUTEX)?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
             // Wait up to 3 s for a starting instance to create its window.
             for _ in 0..30 {
-                if let Ok(existing) = FindWindowW(CLASS_NAME, PCWSTR::null()) {
+                if let Ok(existing) = FindWindowW(CLASS_NAME, None) {
                     let mut pid = 0;
                     GetWindowThreadProcessId(existing, Some(&mut pid));
                     let _ = AllowSetForegroundWindow(pid);
@@ -188,8 +190,14 @@ pub fn run() -> Result<()> {
                 size,
                 size,
                 LR_DEFAULTCOLOR,
-            )?;
-            Ok(HICON(icon.0))
+            );
+            if let Ok(handle) = icon
+                && !handle.is_invalid()
+            {
+                Ok(HICON(handle.0))
+            } else {
+                LoadIconW(None, IDI_APPLICATION)
+            }
         };
         let small_icon = load_icon(SM_CXSMICON)?;
         let large_icon = load_icon(SM_CXICON)?;
@@ -284,6 +292,7 @@ pub fn run() -> Result<()> {
             surfaces: Library::load(),
             surface_errors: Vec::new(),
             surface: None,
+            radios: surface::radios::Panel::default(),
             commands_sent: 0,
             taskbar: None,
             taskbar_failures: 0,
@@ -296,6 +305,7 @@ pub fn run() -> Result<()> {
             morphed: false,
             outline: None,
             previous_foreground: HWND::default(),
+            previous_target: None,
         };
         LAUNCHER.with(|cell| *cell.borrow_mut() = Some(launcher));
         with_launcher(|l| {
@@ -457,6 +467,7 @@ struct Launcher {
     /// Problems with the user's surface files that the user has been told about.
     surface_errors: Vec<String>,
     surface: Option<OpenSurface>,
+    radios: surface::radios::Panel,
     /// Commands sent to the worker. State read before the worker ran all of
     /// them would undo changes the launcher already shows.
     commands_sent: u64,
@@ -475,6 +486,7 @@ struct Launcher {
     morphed: bool,
     outline: Option<RECT>,
     previous_foreground: HWND,
+    previous_target: Option<commands::open_windows::Target>,
 }
 
 struct Morph {
@@ -544,23 +556,15 @@ impl Launcher {
     }
 
     fn sync_exclusive_shell(&mut self) {
-        // Only establish desktop surface and startup apps if LeanShell actually owns
-        // the current interactive logon session (Explorer is not running as the desktop shell).
-        let is_exclusive = leanshell_platform_win::is_session_exclusive();
-
-        if is_exclusive {
-            if self.desktop.is_none() {
-                match crate::desktop::DesktopWindow::new() {
-                    Ok(desktop) => self.desktop = Some(desktop),
-                    Err(e) => eprintln!("Could not create desktop window: {e}"),
-                }
+        if self.desktop.is_none() {
+            match crate::desktop::DesktopWindow::new() {
+                Ok(desktop) => self.desktop = Some(desktop),
+                Err(e) => eprintln!("Could not create desktop window: {e}"),
             }
-            if !self.startup_launched {
-                self.startup_launched = true;
-                crate::startup::launch_logon_startup_apps();
-            }
-        } else {
-            self.desktop = None;
+        }
+        if !self.startup_launched && leanshell_platform_win::is_session_exclusive() {
+            self.startup_launched = true;
+            crate::startup::launch_logon_startup_apps();
         }
     }
 
@@ -682,10 +686,8 @@ impl Launcher {
             dock.set_apps(&self.apps, &self.icons);
             dock.set_window_list_mode(self.config.window_list);
             dock.set_app_icon_size(self.config.dock_icon_size as u32);
-            // Notification icons need a home while the taskbar is hidden or in exclusive shell mode.
-            let tray_enabled = self.config.shell_mode == leanshell_core::config::ShellMode::Exclusive
-                || self.taskbar.as_ref().is_some_and(TaskbarHider::is_active);
-            dock.set_tray(tray_enabled);
+            // Notification icons are hosted in LeanShell's dock.
+            dock.set_tray(true);
             let autohide = if self.config.display_mode == DisplayMode::Panel {
                 false
             } else {
@@ -782,27 +784,11 @@ impl Launcher {
         }
     }
 
-    /// Hides or restores the taskbar to match the config, or hides it again.
-    /// Only the taskbar and the dock's notification area change here, so a
-    /// retry cannot touch the launcher or the dock's visibility.
+    /// In exclusive shell mode, notification icons are hosted in LeanShell's dock.
     fn sync_taskbar(&mut self) {
-        let result = match &mut self.taskbar {
-            Some(hider) if self.config.hide_taskbar => hider.reapply(),
-            _ => TaskbarHider::configure(
-                &mut self.taskbar,
-                self.hwnd,
-                self.config.hide_taskbar,
-                self.config.watchdog,
-            ),
-        };
-        match result {
-            Ok(()) => self.taskbar_failures = 0,
-            Err(e) => self.taskbar_failed(&e),
-        }
-        let active = self.taskbar.as_ref().is_some_and(TaskbarHider::is_active);
+        self.taskbar = None;
         if let Some(dock) = &mut self.dock {
-            // Notification icons need a home while the taskbar is hidden.
-            dock.set_tray(active);
+            dock.set_tray(true);
         }
     }
 
@@ -910,6 +896,7 @@ impl Launcher {
         });
         if !self.visible {
             self.previous_foreground = unsafe { GetForegroundWindow() };
+            self.previous_target = commands::open_windows::Target::capture(self.previous_foreground);
         }
         self.editor.select_all();
         self.update_results();
@@ -949,13 +936,30 @@ impl Launcher {
         self.paint();
     }
 
+    /// File icons are cached per program or shortcut, so a long session of
+    /// searches keeps adding them. Past a limit, drop them while hidden; the
+    /// next search loads the ones it shows again.
+    fn trim_file_icons(&mut self) {
+        const MAX_PER_FILE_ICONS: usize = 512;
+        if self.icons.keys().filter(|key| files::is_per_file_icon(key)).count() <= MAX_PER_FILE_ICONS {
+            return;
+        }
+        self.icons.retain(|key, _| !files::is_per_file_icon(key));
+        self.renderer.clear_icons();
+        self.file_search.forget_file_icons();
+        // Search again on the next open, so the shown files get their icons back.
+        self.file_query = None;
+    }
+
     fn hide(&mut self) {
         self.drag_press = None;
         if !self.visible {
             return;
         }
         let opacity = self.morph_opacity();
+        self.trim_file_icons();
         self.visible = false;
+        self.radios.close();
         if self.morphed && self.unified() && !self.taskbar.as_ref().is_some_and(TaskbarHider::is_peeking) {
             let to = self.dock.as_ref().unwrap().resting_rect();
             self.begin_morph(self.outline.unwrap_or_else(|| self.current_rect()), to, false, opacity);
@@ -1306,6 +1310,10 @@ impl Launcher {
             return;
         }
         self.base_results = commands::search(self.editor.text(), &self.command_state);
+        self.base_results.extend(commands::open_windows::target_items(
+            self.editor.text(),
+            self.previous_target.as_ref(),
+        ));
         if !commands::is_window_query(self.editor.text()) {
             self.base_results.extend(self.surfaces.search(self.editor.text()));
             self.base_results.extend(
@@ -1343,7 +1351,8 @@ impl Launcher {
             // results below the apps don't flicker on each keystroke.
             Some(query) if self.file_query.as_deref() != Some(query) => {
                 let exclude = Arc::from(self.config.file_search_exclude.as_slice());
-                self.file_search.search(query, limit, exclude);
+                self.file_search
+                    .search(query, limit, exclude, self.config.file_search_everything);
                 self.file_query = Some(query.to_string());
             }
             Some(_) => {}
@@ -1506,11 +1515,48 @@ impl Launcher {
                 self.hide();
                 return;
             }
+            Command::WindowControl(ref target, control) => {
+                if !target.valid() {
+                    tray::notify(
+                        self.hwnd,
+                        crate::channel::NAME,
+                        "The original window was closed or replaced.",
+                        true,
+                    );
+                    return;
+                }
+                self.hide();
+                if let Err(error) = target.run(control) {
+                    tray::notify(self.hwnd, crate::channel::NAME, &error, true);
+                }
+                return;
+            }
             Command::Power(power) => {
                 self.hide();
                 if let Err(error) = commands::power::run(power) {
                     tray::notify(self.hwnd, crate::channel::NAME, &error, true);
                 }
+                return;
+            }
+            Command::WispSettings => {
+                let _ = launch::settings(false);
+                self.hide();
+                return;
+            }
+            Command::RadioView(wifi) => {
+                let title = if wifi { "Wi-Fi" } else { "Bluetooth" };
+                if let Some(index) = self.surfaces.specs.iter().position(|s| s.title == title) {
+                    self.open_surface(index);
+                }
+                return;
+            }
+            Command::RadioSelect(id) => {
+                self.select_radio(&id);
+                return;
+            }
+            Command::WifiPower(on) | Command::BluetoothPower(on) if self.radios.wifi.is_some() => {
+                self.radios.request_power(on, self.hwnd, WM_APP_COMMANDS);
+                self.update_surface();
                 return;
             }
             _ => {}
@@ -1611,7 +1657,8 @@ impl Launcher {
     }
 
     fn drain_command_events(&mut self) {
-        let mut changed = false;
+        let mut changed = self.radios.wifi.is_some();
+        self.radios.take();
         while let Ok(event) = self.command_events.try_recv() {
             match event {
                 commands::Event::State(mut state, icons, ran) => {
@@ -1776,6 +1823,13 @@ impl Launcher {
     }
 
     fn on_char(&mut self, unit: u16) {
+        if matches!(self.radios.phase, surface::radios::Phase::Password(_)) {
+            if unit >= 32 && unit != 127 && self.radios.password.len() < 128 {
+                self.radios.password.push(unit);
+                self.update_surface();
+            }
+            return;
+        }
         // Space presses the focused widget, unless it is part of a filter.
         if unit == u16::from(b' ') && self.surface.is_some() && self.editor.text().is_empty() {
             self.activate_surface();
@@ -1971,7 +2025,7 @@ impl Launcher {
     /// Reloads the surface library, reporting new problems with the user's files.
     fn load_surfaces(&mut self) {
         let _span = util::perf::Span::new("surfaces");
-        self.surfaces = Library::load();
+        self.surfaces.reload();
         let new: Vec<&String> = self
             .surfaces
             .errors
@@ -1986,10 +2040,19 @@ impl Launcher {
     }
 
     fn open_surface(&mut self, index: usize) {
-        if self.surfaces.specs.get(index).is_none() {
+        let Some(spec) = self.surfaces.specs.get(index) else {
             return;
-        }
+        };
+        let radio = match spec.title.as_str() {
+            "Wi-Fi" => Some(true),
+            "Bluetooth" => Some(false),
+            _ => None,
+        };
         self.leave_scope();
+        self.radios.close();
+        if let Some(wifi) = radio {
+            self.radios.open(wifi, self.hwnd, WM_APP_COMMANDS);
+        }
         let rows_before = self.window_rows();
         self.surface = Some(OpenSurface {
             index,
@@ -2019,6 +2082,7 @@ impl Launcher {
         let Some(open) = self.surface.take() else {
             return false;
         };
+        self.radios.close();
         unsafe {
             let _ = KillTimer(Some(self.hwnd), SURFACE_TIMER);
         }
@@ -2041,7 +2105,11 @@ impl Launcher {
             .widgets
             .get(open.focus)
             .map(|w| (w.id.clone(), w.command_at(open.stop).cloned()));
-        open.widgets = surface::resolve(spec, &self.command_state, self.editor.text());
+        open.widgets = if self.radios.wifi.is_some() {
+            self.radios.widgets(self.editor.text())
+        } else {
+            surface::resolve(spec, &self.command_state, self.editor.text())
+        };
         open.rects = nav::layout(&open.widgets, crate::render::surface_width());
         let same = focused
             .as_ref()
@@ -2111,6 +2179,57 @@ impl Launcher {
 
     /// Handles keys while a surface is open. Returns false for keys that edit the filter.
     fn on_surface_key(&mut self, vk: VIRTUAL_KEY, ctrl: bool, shift: bool) -> bool {
+        if let surface::radios::Phase::Password(name) = &self.radios.phase {
+            let name = name.clone();
+            match vk {
+                VK_ESCAPE => {
+                    self.radios.phase.cancel();
+                    self.radios.password.fill(0);
+                    self.radios.password.clear();
+                }
+                VK_BACK => {
+                    if let Some(last) = self.radios.password.pop()
+                        && (0xDC00..=0xDFFF).contains(&last)
+                    {
+                        self.radios.password.pop();
+                    }
+                }
+                VK_V if ctrl => {
+                    if let Some(text) = system::get_clipboard(self.hwnd) {
+                        self.radios.password.extend(
+                            text.chars()
+                                .filter(|c| !c.is_control())
+                                .collect::<String>()
+                                .encode_utf16()
+                                .take(128 - self.radios.password.len()),
+                        );
+                    }
+                }
+                VK_RETURN if !self.radios.password.is_empty() => {
+                    if let Some(mut network) = self
+                        .radios
+                        .networks
+                        .as_ref()
+                        .and_then(|n| n.list.iter().find(|n| n.name == name))
+                        .cloned()
+                    {
+                        network.profile = None;
+                        let password = String::from_utf16_lossy(&self.radios.password);
+                        self.radios.password.fill(0);
+                        self.radios.password.clear();
+                        self.radios.phase.submit(true);
+                        self.radios.start(
+                            surface::radios::Job::Network(network, Some(password)),
+                            self.hwnd,
+                            WM_APP_COMMANDS,
+                        );
+                    }
+                }
+                _ => return false,
+            }
+            self.update_surface();
+            return true;
+        }
         let Some(open) = &self.surface else {
             return false;
         };
@@ -2247,9 +2366,46 @@ impl Launcher {
         self.invalidate();
     }
 
+    fn select_radio(&mut self, id: &str) {
+        use surface::radios::{Job, Phase};
+        if self.radios.busy() || matches!(self.radios.phase, Phase::Password(_)) {
+            return;
+        }
+        if self.radios.wifi == Some(true) {
+            let network = self
+                .radios
+                .networks
+                .as_ref()
+                .and_then(|n| n.list.iter().find(|n| n.name == id))
+                .cloned();
+            if let Some(network) = network
+                && self.radios.phase.select(&network)
+            {
+                self.radios
+                    .start(Job::Network(network, None), self.hwnd, WM_APP_COMMANDS);
+            }
+        } else if let Some(device) = self.radios.devices.iter().find(|d| d.id == id).cloned() {
+            if matches!(&self.radios.phase, Phase::Failed(failed, _) if failed == id) {
+                let _ = launch::open("ms-settings:bluetooth");
+            } else if let Some(endpoint) = device.audio_id {
+                self.radios.phase = Phase::Pending(device.id);
+                self.radios
+                    .start(Job::Audio(endpoint, !device.connected), self.hwnd, WM_APP_COMMANDS);
+            } else {
+                let _ = launch::open("ms-settings:bluetooth");
+            }
+        }
+        self.invalidate();
+    }
+
     fn surface_tick(&mut self) {
         if self.visible && self.surface.is_some() {
-            self.commands.refresh();
+            if self.radios.wifi.is_some() {
+                self.radios.take();
+                self.radios.refresh(self.hwnd, WM_APP_COMMANDS);
+            } else {
+                self.commands.refresh();
+            }
             // The clock changes without new state.
             self.update_surface();
         }
@@ -2271,13 +2427,7 @@ impl Launcher {
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_RECOVERY);
         }
         tray::remove(self.hwnd);
-
-        // If we were running as the exclusive shell and we are quitting/closing,
-        // ensure Explorer is launched so the user is never left without a desktop shell!
-        if leanshell_platform_win::is_session_exclusive() && crate::tray_host::explorer_tray().is_none() {
-            eprintln!("LeanShell exclusive shutdown: launching explorer.exe shell handoff...");
-            let _ = std::process::Command::new("explorer.exe").spawn();
-        }
+        taskbar::emergency_restore();
     }
 }
 
@@ -2377,7 +2527,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     })
     .unwrap_or(false);
     if dock_message {
-        return with_launcher(|l| l.dock.as_ref().unwrap().dispatch(msg, wparam, lparam)).unwrap_or(LRESULT(0));
+        return with_launcher(|l| {
+            l.dock
+                .as_ref()
+                .map(|d| d.dispatch(msg, wparam, lparam))
+                .unwrap_or(LRESULT(0))
+        })
+        .unwrap_or(LRESULT(0));
     }
     match msg {
         // DWM needs the frame styles for acrylic. Make the full window client area.
@@ -2398,6 +2554,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 util::perf::input("hotkey_to_content");
                 with_launcher(Launcher::toggle);
             }
+        }
+        WM_APP_TOGGLE => {
+            util::perf::input("hotkey_to_content");
+            with_launcher(Launcher::toggle);
         }
         WM_APP_SHOW => {
             with_launcher(Launcher::show);
@@ -2536,6 +2696,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             return LRESULT(0);
         }
         WM_KEYDOWN | WM_SYSKEYDOWN => {
+            // Holding Enter must not toggle a radio again after its worker finishes.
+            if wparam.0 == VK_RETURN.0 as usize
+                && lparam.0 & (1 << 30) != 0
+                && with_launcher(|l| l.radios.wifi.is_some()) == Some(true)
+            {
+                return LRESULT(0);
+            }
             if with_launcher(|l| l.on_key(VIRTUAL_KEY(wparam.0 as u16))) == Some(true) {
                 return LRESULT(0);
             }
@@ -2668,7 +2835,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             });
         }
         dock::WM_SHOW_LAUNCHER => {
-            with_launcher(Launcher::show);
+            util::perf::input("hotkey_to_content");
+            with_launcher(Launcher::toggle);
         }
         dock::WM_DOCK_SHOW_TASKBAR => {
             with_launcher(Launcher::peek_taskbar);

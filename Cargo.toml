@@ -38,6 +38,7 @@ nucleo-matcher = "0.3"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 windows-core = "0.62"
+windows-collections = "0.3"
 windows-numerics = "0.3"
 
 [dev-dependencies]
@@ -66,10 +67,12 @@ features = [
     "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
+    "Win32_Media_KernelStreaming",
     "Win32_NetworkManagement_Ndis",
     "Win32_NetworkManagement_WiFi",
     "Win32_Networking_NetworkListManager",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Console",
     "Win32_System_Com_StructuredStorage",
@@ -86,6 +89,7 @@ features = [
     "Win32_System_Threading",
     "Win32_System_Time",
     "Win32_System_Variant",
+    "Win32_System_WinRT",
     "Win32_UI_Accessibility",
     "Win32_UI_Controls",
     "Win32_UI_HiDpi",

@@ -341,12 +341,46 @@ fn restore_snapshot(snapshot: &Snapshot) -> Result<()> {
     if let Some(error) = error { Err(error) } else { Ok(()) }
 }
 
-/// No Win32 calls run under RECOVERY's lock; panic/reentrant recovery can clone it.
+/// Comprehensive emergency restore invoked on panic, unexpected termination, console signals, or shutdown.
+/// Restores any clipped taskbars, resets auto-hide, restores work areas, unregisters HKCU shell override,
+/// and ensures Explorer is running.
 pub fn emergency_restore() {
     ACTIVE.store(false, Ordering::SeqCst);
     let snapshot = RECOVERY.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(snapshot) = snapshot {
         let _ = restore_snapshot(&snapshot);
+    }
+
+    // Revert user Winlogon Shell override in HKCU if exclusive shell was registered
+    let _ = leanshell_platform_win::unregister_exclusive_shell();
+
+    // Unclip and show all taskbars across all monitors
+    if let Ok(all_bars) = bars() {
+        for bar in all_bars {
+            let hwnd = HWND(bar.hwnd as _);
+            unclip(hwnd, None);
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_SHOW);
+            }
+        }
+    }
+
+    // Clear auto-hide on primary taskbar
+    let _ = set_state(0);
+
+    // Restore desktop work areas
+    if let Ok(mons) = monitors() {
+        let areas: Vec<_> = mons.iter().map(|m| (m.bounds, m.work)).collect();
+        let _ = restore_areas(&areas);
+    }
+
+    // If Explorer is not running, ensure it is spawned
+    let has_explorer = unsafe {
+        FindWindowW(w!("Shell_TrayWnd"), None).is_ok_and(|h| !h.is_invalid())
+            || FindWindowW(w!("Progman"), None).is_ok_and(|h| !h.is_invalid())
+    };
+    if !has_explorer {
+        let _ = std::process::Command::new("explorer.exe").spawn();
     }
 }
 
@@ -508,11 +542,12 @@ fn run_watchdog(
     if result.0 != WAIT_OBJECT_0.0 + handles.len() as u32 - 1 {
         return Err(failure("Unexpected watchdog wait result"));
     }
-    restore_snapshot(&Snapshot {
+    let _ = restore_snapshot(&Snapshot {
         state,
         bars: prior_bars.to_vec(),
         monitors: areas.iter().map(|&(bounds, work)| Monitor { bounds, work }).collect(),
-    })?;
+    });
+    emergency_restore();
     Ok(())
 }
 
@@ -943,6 +978,12 @@ pub fn print_diagnostics() {
 /// Dispatches CLI actions such as `--restore-shell` and `--taskbar-watchdog`.
 pub fn dispatch_cli() -> bool {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && !args.get(1).is_some_and(|a| a == "--taskbar-watchdog") {
+        unsafe {
+            let _ =
+                windows::Win32::System::Console::AttachConsole(windows::Win32::System::Console::ATTACH_PARENT_PROCESS);
+        }
+    }
     if args.iter().any(|a| a == "--register-shell") {
         match std::env::current_exe() {
             Ok(exe) => match leanshell_platform_win::register_exclusive_shell(&exe) {
@@ -966,7 +1007,7 @@ pub fn dispatch_cli() -> bool {
         }
         return true;
     }
-    if args.iter().any(|a| a == "--diagnose") {
+    if args.iter().any(|a| a == "--diagnose" || a == "--diagnostics") {
         print_diagnostics();
         return true;
     }

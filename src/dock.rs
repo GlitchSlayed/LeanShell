@@ -1,7 +1,11 @@
 //! Independent, nonactivating app dock on the message-loop thread.
 
+#[path = "dock/artwork.rs"]
+mod artwork;
 #[path = "dock/desktops.rs"]
 mod desktops;
+#[path = "dock/jump_lists.rs"]
+mod jump_lists;
 #[path = "dock/logic.rs"]
 mod logic;
 #[path = "dock/pins.rs"]
@@ -58,6 +62,7 @@ const WM_TRAY_CHANGED: u32 = WM_APP + 22;
 pub const WM_DOCK_SHOW_TASKBAR: u32 = WM_APP + 23;
 const WM_CLOSE_FLYOUT: u32 = WM_APP + 24;
 const WM_FOREGROUND_CHANGED: u32 = WM_APP + 25;
+const WM_ARTWORK: u32 = WM_APP + 26;
 /// Shows a notification icon's tooltip after a short hover.
 const TIP_TIMER: usize = 104;
 const TIP_MS: u32 = 450;
@@ -108,6 +113,7 @@ struct State {
     panel_align: PanelAlign,
     apps: Vec<AppEntry>,
     icons: HashMap<String, Arc<IconPixels>>,
+    artwork: artwork::Artwork,
     items: Vec<Item>,
     pinned: Vec<AppEntry>,
     palette: Palette,
@@ -117,6 +123,7 @@ struct State {
     renderer: render::Renderer,
     dpi: u32,
     hover: Option<usize>,
+    jump_items: Vec<jump_lists::Item>,
     visible: bool,
     fullscreen: bool,
     scheduled: bool,
@@ -222,6 +229,7 @@ impl Dock {
             panel_align: PanelAlign::Center,
             apps: Vec::new(),
             icons: HashMap::new(),
+            artwork: artwork::Artwork::default(),
             items: Vec::new(),
             pinned: load_pins(),
             palette: Palette::new(true, true),
@@ -231,6 +239,7 @@ impl Dock {
             renderer: render::Renderer::new()?,
             dpi: 96,
             hover: None,
+            jump_items: Vec::new(),
             visible: false,
             fullscreen: false,
             scheduled: false,
@@ -419,7 +428,10 @@ impl Dock {
 
     pub fn owns_message(msg: u32, wp: WPARAM) -> bool {
         msg == WM_TIMER && (REFRESH_TIMER..=WINDOWS_HIDE_TIMER).contains(&wp.0)
-            || matches!(msg, WM_REFRESH | WM_FOREGROUND_CHANGED | WM_TRAY_CHANGED | WM_INPUT)
+            || matches!(
+                msg,
+                WM_REFRESH | WM_FOREGROUND_CHANGED | WM_TRAY_CHANGED | WM_INPUT | WM_ARTWORK
+            )
     }
 
     pub fn mostly_visible(&self) -> bool {
@@ -1325,16 +1337,15 @@ impl State {
                 (self.tray, self.inline) = tray::update(Vec::new(), icons, size);
             }
             let size = logic::icon_pixels(self.dpi, self.app_icon_size);
+            self.artwork.drain();
             for item in &self.items {
-                if self.icons.get(&item.app.id).is_none_or(|p| p.width != size as u32) {
-                    let path = item
-                        .app
-                        .path
-                        .clone()
-                        .unwrap_or_else(|| format!("shell:AppsFolder\\{}", item.app.id));
-                    if let Some(pixels) = tray::app_pixels(&path, size) {
-                        self.icons.insert(item.app.id.clone(), Arc::new(pixels));
-                    }
+                let path = item
+                    .app
+                    .path
+                    .clone()
+                    .unwrap_or_else(|| format!("shell:AppsFolder\\{}", item.app.id));
+                if let Some(pixels) = self.artwork.request(self.hwnd, &item.app.id, &path, size) {
+                    self.icons.insert(item.app.id.clone(), pixels);
                 }
             }
             let parts = self.parts();
@@ -1817,6 +1828,13 @@ impl State {
         }
     }
 
+    fn prefetch_jump_list(&self) {
+        let Some(slot) = self.windows_slot else { return };
+        let Some(item) = self.item_at(slot) else { return };
+        let windows: Vec<isize> = item.windows.iter().map(|w| w.hwnd).collect();
+        jump_lists::prefetch(&item.app.id, item.app.path.as_deref(), &windows);
+    }
+
     /// Draws the hovered app's windows above its icon.
     fn show_windows(&mut self) {
         unsafe {
@@ -2297,7 +2315,25 @@ impl State {
                 let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             }
 
-            // 2. Launch actions (New window, Run as Administrator, Open File Location)
+            // 2. Jump Lists (Recent, Frequent, Tasks)
+            let win_hwnds: Vec<isize> = windows.iter().map(|w| w.hwnd).collect();
+            let jumps = jump_lists::read(&id, path.as_deref(), &win_hwnds);
+            self.jump_items.clear();
+            for section in jumps {
+                if !section.items.is_empty() {
+                    let header: Vec<u16> = section.title.encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(header.as_ptr()));
+                    for item in section.items {
+                        let cmd = jump_lists::MENU_FIRST + self.jump_items.len();
+                        let wide: Vec<u16> = item.title.encode_utf16().chain(std::iter::once(0)).collect();
+                        let _ = AppendMenuW(menu, MF_STRING, cmd, PCWSTR(wide.as_ptr()));
+                        self.jump_items.push(item);
+                    }
+                    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+                }
+            }
+
+            // 3. Launch actions (New window, Run as Administrator, Open File Location)
             let _ = AppendMenuW(menu, MF_STRING, 10, w!("New window"));
             if path.is_some() {
                 let _ = AppendMenuW(menu, MF_STRING, 11, w!("Run as administrator"));
@@ -2333,6 +2369,27 @@ impl State {
                 close_text,
             );
 
+            let owners: Vec<_> = windows
+                .iter()
+                .map(|w| open_windows::owner(w.hwnd, window_aumid(HWND(w.hwnd as _)).as_deref()))
+                .collect();
+            let shell = owners.contains(&open_windows::Owner::Shell);
+            let mut pids: Vec<u32> = owners
+                .iter()
+                .filter_map(|owner| match owner {
+                    open_windows::Owner::Process(pid) => Some(*pid),
+                    _ => None,
+                })
+                .collect();
+            pids.sort_unstable();
+            pids.dedup();
+            let ending = (!shell && end_task_enabled())
+                .then(|| open_windows::EndTask::open(&pids))
+                .filter(open_windows::EndTask::has_target);
+            if ending.is_some() {
+                let _ = AppendMenuW(menu, MF_STRING, 20, w!("End task"));
+            }
+
             let mut point = POINT::default();
             let _ = GetCursorPos(&mut point);
             // Use the dock as menu owner. Its wndproc rejects RefCell reentrancy.
@@ -2358,6 +2415,22 @@ impl State {
                 for window in &windows {
                     let _ = open_windows::close(window.hwnd);
                 }
+            } else if command == 20 {
+                if let Some(ending) = ending
+                    && let Err(error) = ending.end()
+                {
+                    let hint = if error.denied {
+                        " It may be running as another user or protected by Windows. Task Manager can end it."
+                    } else {
+                        ""
+                    };
+                    crate::tray::notify(
+                        self.hwnd,
+                        crate::channel::NAME,
+                        &format!("Could not end task: {}{hint}", error.message),
+                        true,
+                    );
+                }
             } else if command == 10 {
                 let _ = crate::launch::app(&id, path.as_deref(), false);
             } else if command == 11 {
@@ -2371,6 +2444,11 @@ impl State {
                 if let Some(w) = windows.get(w_idx) {
                     let _ = open_windows::focus(w.hwnd);
                 }
+            } else if let Some(jump_idx) = (command as usize).checked_sub(jump_lists::MENU_FIRST)
+                && let Some(item) = self.jump_items.get(jump_idx)
+                && let Err(e) = item.invoke()
+            {
+                eprintln!("Jump list invoke: {e}");
             }
         }
         self.refresh();
@@ -2453,11 +2531,16 @@ fn fullscreen_foreground(dock: HWND) -> bool {
         if hwnd.is_invalid() || hwnd == dock || IsIconic(hwnd).as_bool() {
             return false;
         }
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == std::process::id() {
+            return false;
+        }
         let mut class = [0u16; 128];
         let len = GetClassNameW(hwnd, &mut class);
         if matches!(
             String::from_utf16_lossy(&class[..len as usize]).as_str(),
-            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "LeanShellDesktop"
         ) {
             return false;
         }
@@ -2508,7 +2591,6 @@ unsafe extern "system" fn window_event(
             | EVENT_OBJECT_SHOW
             | EVENT_OBJECT_HIDE
             | EVENT_OBJECT_NAMECHANGE
-            | EVENT_OBJECT_LOCATIONCHANGE
             | EVENT_OBJECT_CLOAKED
             | EVENT_OBJECT_UNCLOAKED
     ) || object != OBJID_WINDOW.0
@@ -2559,6 +2641,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     let backdrop = s.backdrop;
                     s.apply_material(dark, backdrop);
                 }
+                WM_ARTWORK => {
+                    s.artwork.drain();
+                    s.place();
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    return LRESULT(0);
+                }
                 WM_REFRESH => {
                     if !s.scheduled {
                         s.scheduled = SetTimer(Some(hwnd), REFRESH_TIMER, 100, None) != 0;
@@ -2598,6 +2686,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     return LRESULT(0);
                 }
                 WM_TIMER if wp.0 == WINDOWS_TIMER => {
+                    s.prefetch_jump_list();
                     s.show_windows();
                     return LRESULT(0);
                 }
@@ -2973,5 +3062,26 @@ unsafe extern "system" fn popup_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
         }
         drop(s);
         DefWindowProcW(hwnd, msg, wp, lp)
+    }
+}
+
+/// Whether Windows offers End task on the taskbar: Settings > System > For
+/// developers > End task. Off for most people, so the dock hides it too.
+fn end_task_enabled() -> bool {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+    let mut value = 0u32;
+    let mut size = 4u32;
+    unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced\\TaskbarDeveloperSettings"),
+            w!("TaskbarEndTask"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut value).cast()),
+            Some(&mut size),
+        )
+        .is_ok()
+            && value == 1
     }
 }

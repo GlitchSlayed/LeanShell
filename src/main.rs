@@ -19,6 +19,7 @@ mod indexer;
 mod install;
 mod launch;
 mod morph;
+mod panic_log;
 mod render;
 mod search;
 mod startup;
@@ -31,10 +32,12 @@ mod tray_host;
 mod util;
 
 fn main() {
+    panic_log::install();
     if taskbar::dispatch_cli() {
         return;
     }
     if let Err(e) = app::run() {
+        eprintln!("LeanShell startup error: {:?}", e);
         util::error_box(&format!("LeanShell could not start:\n{}", e.message()));
     }
 }
