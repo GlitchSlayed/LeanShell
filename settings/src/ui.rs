@@ -798,7 +798,7 @@ impl Settings {
                 busy("Updating…"),
             ),
             Updates::Installed(version) => (
-                format!("Wisp {version} is installed. Restart settings to use the new version.").into(),
+                format!("Wisp {version} is installed. Restart Settings to use the new version.").into(),
                 Button::new("restart-settings")
                     .primary()
                     .label("Restart")
@@ -1182,7 +1182,7 @@ impl Settings {
                     .child(divider(p))
                     .child(row(
                         "Backdrop",
-                        "Acrylic and mica blur what is behind the launcher and fade in. Solid appears at once.",
+                        "Acrylic and Mica blur what is behind the launcher and fade in. Solid appears at once.",
                         Select::new(&self.backdrop).accessibility_label("Backdrop").w(px(160.)),
                         p,
                     ))
@@ -1285,7 +1285,7 @@ impl Settings {
                 group(p)
                     .child(row(
                         "File search",
-                        "Search file names. Start a query with ? to search only files.",
+                        "Search file names. Start a query with ? to search files only.",
                         Switch::new("file-search")
                             .checked(self.config.file_search)
                             .accessibility_label("File search")
