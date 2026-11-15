@@ -54,6 +54,7 @@ use crate::indexer::{AppEntry, IconPixels};
 use crate::theme::{Palette, Tint};
 use crate::tray_host::{self, Action, TrayHost};
 
+use crate::messages::WM_APP_FRAME;
 use crate::messages::WM_ARTWORK;
 use crate::messages::WM_CLOSE_FLYOUT;
 pub(crate) use crate::messages::WM_DOCK_DRAIN;
@@ -1655,7 +1656,8 @@ impl State {
 
     /// Slides the dock in when the pointer reaches a bottom edge, and out once
     /// it has been away for a moment.
-    fn poll(&mut self) {
+    /// `waiting`: a menu or a launch of the dock's is waiting on the user.
+    fn poll(&mut self, waiting: bool) {
         let _span = crate::util::perf::Span::new("dock_poll");
         let mut cursor = POINT::default();
         if unsafe { GetCursorPos(&mut cursor) }.is_err() {
@@ -1756,7 +1758,9 @@ impl State {
             && cursor.x < windows_rect.right
             && cursor.y >= windows_rect.top
             && cursor.y < windows_rect.bottom;
+        // The dock stays under its own menu, wherever the pointer goes in it.
         let near = !self.autohide
+            || waiting
             || self.held
             || self.press.is_some()
             || self.flyout_open
@@ -1906,8 +1910,13 @@ impl State {
         self.slide_from = self.slide_value();
         self.slide_to = to;
         self.slide = Some(Instant::now());
-        if !self.frame_paced {
-            unsafe {
+        unsafe {
+            if self.frame_paced {
+                // The owner looks for animations between messages of its own
+                // loop only: ask for a frame, so a slide begun inside a menu's
+                // loop moves too.
+                let _ = PostMessageW(Some(self.owner), WM_APP_FRAME, WPARAM(0), LPARAM(0));
+            } else {
                 SetTimer(Some(self.hwnd), SLIDE_TIMER, 10, None);
             }
         }
@@ -3504,7 +3513,7 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                     return LRESULT(0);
                 }
                 WM_TIMER if wp.0 == POLL_TIMER => {
-                    s.poll();
+                    s.poll((*pointer).modal.get() > 0);
                     return LRESULT(0);
                 }
                 WM_DOCK_WAKE => {
