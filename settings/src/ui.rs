@@ -753,7 +753,6 @@ impl Settings {
 
     fn updates_row(&self, p: Palette, cx: &mut Context<Self>) -> Div {
         let manager = crate::install::current_manager();
-        let current = env!("CARGO_PKG_VERSION");
         let check = |label: &'static str, cx: &mut Context<Self>| {
             Button::new("check-updates")
                 .label(label)
@@ -764,10 +763,7 @@ impl Settings {
         let (description, control): (SharedString, AnyElement) = match &self.updates {
             Updates::Idle => ("".into(), check("Check for updates", cx)),
             Updates::Checking => ("".into(), busy("Checking…")),
-            Updates::Latest => (
-                format!("Version {current} is the latest version.").into(),
-                check("Check again", cx),
-            ),
+            Updates::Latest => ("Up to date.".into(), check("Check again", cx)),
             Updates::Available(release) => {
                 let page = release.page.clone();
                 (
@@ -1255,7 +1251,7 @@ impl Settings {
                 group(p)
                     .child(row(
                         "File search",
-                        "Searches file names.",
+                        "",
                         Switch::new("file-search")
                             .checked(self.config.file_search)
                             .accessibility_label("File search")
