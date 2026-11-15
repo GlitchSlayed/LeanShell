@@ -687,7 +687,7 @@ unsafe fn draw(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
                 );
             }
             let progress = frame.hover_levels.get(index).copied().unwrap_or(0.0);
-            let lift = 2.0 * progress * progress * (3.0 - 2.0 * progress);
+            let lift = 2.0 * crate::ease::smoothstep(progress);
             let icon_size = *app_icon_size;
             let icon_top = ICON_CENTER_Y * frame.layout_scale - icon_size / 2.0 - lift * frame.layout_scale;
             let icon_rect = frame.snap_rect(

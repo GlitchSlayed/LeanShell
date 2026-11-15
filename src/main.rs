@@ -9,6 +9,7 @@ mod config;
 mod deferred;
 mod dock;
 mod drag;
+mod ease;
 mod editor;
 mod files;
 mod history;

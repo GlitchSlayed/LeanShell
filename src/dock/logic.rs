@@ -295,9 +295,7 @@ pub fn slide_value(from: f32, to: f32, progress: f32) -> f32 {
     if progress >= 1.0 {
         return to;
     }
-    let t = progress.clamp(0.0, 1.0);
-    let ease = t * t * (3.0 - 2.0 * t);
-    from + (to - from) * ease
+    from + (to - from) * crate::ease::smoothstep(progress)
 }
 
 pub fn icon_pixels(dpi: u32, size: f32) -> i32 {

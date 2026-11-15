@@ -13,6 +13,8 @@ mod deferred;
 mod dock;
 #[path = "../src/drag.rs"]
 mod drag;
+#[path = "../src/ease.rs"]
+mod ease;
 #[path = "../src/editor.rs"]
 mod editor;
 #[path = "../src/files.rs"]

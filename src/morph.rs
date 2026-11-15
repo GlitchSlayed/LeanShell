@@ -4,10 +4,6 @@ use windows::Win32::Foundation::RECT;
 pub const OPEN_MS: f32 = 155.0;
 pub const CLOSE_MS: f32 = 135.0;
 
-pub fn ease(t: f32) -> f32 {
-    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
-}
-
 pub fn fades(expanded: f32) -> (f32, f32) {
     (
         (1.0 - expanded / 0.38).clamp(0.0, 1.0),
@@ -24,8 +20,7 @@ pub fn radius(expanded: f32) -> f32 {
 }
 
 pub fn bounds(from: RECT, to: RECT, progress: f32) -> RECT {
-    let t = progress.clamp(0.0, 1.0);
-    let t = ease(t);
+    let t = crate::ease::out_cubic(progress);
     let mix = |a: i32, b: i32| (a as f32 + (b - a) as f32 * t).round() as i32;
     RECT {
         left: mix(from.left, to.left),
