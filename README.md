@@ -5,8 +5,7 @@
 <h1 align="center">Wisp</h1>
 
 <p align="center">
-  <b>A dock and a launcher for Windows.</b><br>
-  Replaces the taskbar. The dock and launcher are one 2.2 MB executable.
+  <b>A fast launcher for Windows, with a dock that can replace the taskbar.</b>
 </p>
 
 <p align="center">
@@ -20,9 +19,23 @@
   <img src="assets/dock-to-launcher.webp" width="700" alt="The dock slides up, then grows into the launcher">
 </p>
 
-Wisp hides the taskbar and puts a dock in its place. Press <kbd>Alt</kbd>+<kbd>Space</kbd> and the dock grows into a launcher.
+Wisp is a keyboard launcher for Windows 11: press <kbd>Alt</kbd>+<kbd>Space</kbd>, type, press <kbd>Enter</kbd>. Its optional dock hides the taskbar and takes its place, and grows into the launcher when you open it.
 
-It is written in Rust with Win32 and Direct2D. It needs no .NET, web view or PowerToys.
+The dock and launcher are one 2.2 MB executable, written in Rust with Win32 and Direct2D. Wisp needs no .NET, web view or PowerToys.
+
+## Features
+
+- **Launcher**: finds apps, files and open windows, calculates, runs commands, and searches the web.
+- **File search**: file names from the Windows Search index, or from [Everything](https://www.voidtools.com/) on every drive when it's running.
+- **System commands**: Wi-Fi, Bluetooth, volume, audio output, media, Night Light, dark mode, power, and the window you opened the launcher over.
+- **Dock**: running and pinned apps, with window lists on hover and Jump Lists on right-click. Autohides, or stays visible.
+- **Status**: sound, battery, Wi-Fi, Bluetooth and the clock, grouped or as separate icons, or hidden.
+- **Tray icons**: the same icons and clicks as on the taskbar.
+- **Arrange it**: drag apps and whole sections of the dock into any order.
+- **Now**: a panel for time, battery, Wi-Fi networks, Bluetooth devices, volume and media.
+- **Look**: light and dark themes, acrylic, mica or solid backdrops, and your own dock color.
+- **Win key**: optionally open Wisp with the Windows key instead of Start.
+- **Updates**: a daily check, and one-click updates from Settings.
 
 ## Install
 
@@ -41,82 +54,42 @@ winget install SumirSeth.Wisp
 Update that install with `winget upgrade SumirSeth.Wisp`.
 
 > [!NOTE]
-> Enable **Use Win key** in Settings to open Wisp by tapping either Windows key alone, instead of your shortcut. Windows shortcuts and Win+click still work. With an elevated app in front, Windows may block the hook or its mask key (UIPI), so Start can open as usual.
-
-> PowerToys Run also uses <kbd>Alt</kbd>+<kbd>Space</kbd>. Turn it off, or change Wisp's shortcut.
-
-> [!NOTE]
 > Wisp is not code-signed. If SmartScreen warns you, select **More info → Run anyway**.
 
-## Dock
+> [!NOTE]
+> PowerToys Run also uses <kbd>Alt</kbd>+<kbd>Space</kbd>. Turn it off, or change Wisp's shortcut.
 
-The dock appears when the pointer touches the bottom edge of a screen, and hides when you move away. To keep it on screen, turn on **Keep the dock visible** in Settings. Maximized windows then stop above it.
+## Usage
 
-| Do this | To |
-| --- | --- |
-| Click an app | Switch to it |
-| Click the app in front | Minimize it |
-| Drag the launcher, a gap beside the apps, the tray chevron, status, an own status icon or clock | Move that whole section; the order is saved |
-| Drag an app sideways | Rearrange it; drop among pins to pin it, or among running apps to unpin it |
-| Middle-click an app | Open a new window of it |
-| Right-click an app | Pin or unpin it, or close its windows |
-| Hover an app with several windows | See its windows. Click one to switch to it, middle-click to close it. |
-| Click a tray icon | Use it as you would on the taskbar |
-| Click **⌄** | Show the hidden tray icons |
-| Right-click **⌄** | Show the taskbar, or open taskbar settings |
-| Click the status group or an own status icon | Open Now |
-| Hover the status group or an own status icon | See details for its items |
-| Scroll over the status group containing sound, or the sound own icon | Change the volume by 2% a notch |
-| Right-click the status group | Open sound settings if grouped, otherwise the first grouped item's settings |
-| Right-click an own status icon | Open its Windows settings page |
-| Click the clock | Open notifications and the calendar |
-| Scroll anywhere else | Switch virtual desktops |
-| <kbd>Shift</kbd>+scroll | Scroll through the apps |
-
-Choose **In group**, **Own icon** or **Hidden** for each status item in Settings, under Dock, in Status. Three grouped items keep their home cells; two sit side by side; one uses a full-size glyph. Own icons show volume and battery percentages beneath their glyphs. Wi-Fi shows signal strength and Bluetooth marks connected devices; their full details appear in tooltips. Own icons open Now, show their own tooltip and open their Windows settings page on right-click. Scroll sound to change volume. Drag own icons like the clock.
-
-Tray icons keep their usual clicks; drag their chevron or the gap beside them to move the tray block. All app icons stay together when sections move. The section order is saved in `dock_order` in config.toml.
-
-Right-click an app and choose **Pin to dock** to keep it before running apps, in pin order. Click a closed pinned app to start it. To clear pins, choose **Unpin all apps** in Settings.
-
-Right-click an app for its Jump List above the app name: up to six recent files (or frequent ones, when there are no recent ones) and up to six of the app's own tasks. Empty sections and missing local files are hidden. Apps whose identity Windows does not expose have no Jump List.
-
-The dock hides over full-screen apps. Tray icons you pin in Windows show in the dock; the rest are behind **⌄**.
-
-If Wisp quits or crashes, the taskbar comes back with every tray icon.
-
-## Launcher
+### Launcher
 
 <p align="center">
   <img src="assets/screenshot-launcher.png" width="700" alt="The launcher searching for apps">
 </p>
 
-Type to search, then press <kbd>Enter</kbd>.
+Press <kbd>Alt</kbd>+<kbd>Space</kbd>, type, then press <kbd>Enter</kbd>. Apps you opened recently rank higher, and with the box empty the launcher shows them.
 
 | Type | To |
 | --- | --- |
 | `code` | Find apps, then files. `vsc` finds Visual Studio Code. |
+| `cmd` · `taskmgr` · `regedit` | Find Windows tools by program name, in any Windows language |
 | `?invoice` | Find files only |
 | `^vis` · `term$` · `'note` · `!edge` | Match the start · the end · exactly · exclude |
+| `w code` | Switch to an open window |
 | `sqrt(2) * 10` | Calculate. <kbd>Enter</kbd> copies the result. |
 | `> ipconfig` | Run a command in Command Prompt |
-| `night light` · `night light off` | Turn Night Light on or off. The row shows its current state. Where Wisp can't read that state, it offers the Windows Settings page instead. |
-| `theme` · `dark mode` · `light mode` | Switch Windows and apps between dark and light mode. One row offers the mode that isn't on. |
-| `minimize` · `maximize` · `restore` · `close window` · `always on top` | Control the window you opened the launcher over. Its title appears below the action. |
 | `wifi off` · `bt` · `vol 40` · `mute` | Change a setting. <kbd>Tab</kbd> lists networks, devices or outputs. |
+| `night light` · `night light off` | Turn Night Light on or off |
+| `theme` · `dark mode` · `light mode` | Switch Windows and apps between dark and light mode |
+| `minimize` · `maximize` · `restore` · `close window` · `always on top` | Control the window you opened the launcher over |
 | `play` · `pause` · `next` | Control media |
-| `w code` | Switch to an open window |
 | `lock` · `sleep` · `hibernate` · `restart` · `shut down` | Lock or power off. Hibernate appears when Windows allows it. Some ask for a second <kbd>Enter</kbd>. |
 | `time tokyo` · `date` | Copy a time or the date |
 | `display` · `colors` · … | Open that Windows Settings page |
-| `now` · `sound` | Open live panels for status and audio |
+| `now` · `sound` | Open the status and audio panels |
 | `wisp` · `settings` | Open Wisp's Settings |
 | `quit` | Quit Wisp |
 | Anything else | Search the web |
-
-Find apps by their program name too: `cmd`, `taskmgr` or `regedit` work whatever the language of Windows.
-
-Apps you opened recently rank higher. With the box empty, the launcher shows your recent apps.
 
 | Key | To |
 | --- | --- |
@@ -128,53 +101,76 @@ Apps you opened recently rank higher. With the box empty, the launcher shows you
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> | Copy the path |
 | <kbd>Esc</kbd> | Close |
 
+Drag a result out of the launcher to drop it elsewhere: a file into a chat or a folder, an app onto the desktop as a shortcut, text or a link into any text box.
+
+To open Wisp with the Windows key instead, turn on **Use Win key** in Settings. It replaces your shortcut; Windows shortcuts such as <kbd>Win</kbd>+<kbd>E</kbd> still work. While an elevated app is in front, the key may open Start.
+
 ### Now
 
-**Now** shows the time, battery, Wi-Fi, Bluetooth, volume and media. Click Wi-Fi or Bluetooth (or select a row with the arrow keys and press Enter) to open its list. Esc or Backspace on an empty filter returns to Now. Search `wifi`, `wi-fi`, `network` or `bluetooth` to open a panel directly.
+Type `now`, or click the status icons in the dock. **Now** shows the time, battery, Wi-Fi, Bluetooth, volume and media.
 
-Wi-Fi lists nearby networks, connected first and then by signal, with a lock on secured networks. Select the current network to disconnect, or another to connect. New personal networks ask for a masked password field below the row: Enter connects, Esc cancels. The header switch is the first keyboard focus target in both radio views: press Enter to toggle, Down to enter the list, and Up to return to the header (Tab also cycles controls). It shows the target immediately with "Changing..." until Windows confirms it; a failure restores the actual state and shows an error. If nearby networks are unavailable, Wisp shows the current network and a link to Location settings. Enterprise and unsupported security types use Windows Wi-Fi settings.
+- **Wi-Fi**: select a network to connect or disconnect. New networks ask for their password in place. Enterprise networks open Windows Wi-Fi settings.
+- **Bluetooth**: select a paired audio device to connect or disconnect it. Other devices open Bluetooth settings.
 
-Bluetooth lists paired classic and LE devices, connected first, with battery levels where Windows provides them. Supported audio devices connect or disconnect through their audio driver. Other devices say that they open Bluetooth settings; **Add device** opens the same page. The switch controls Bluetooth power. Radio state refreshes about every two seconds while open, including changes made in Windows quick settings. Wi-Fi scans run on opening, after turning on, and at most every ten seconds while open and on. Refreshes stop when closed or hidden.
+Type `wifi` or `bluetooth` to go straight to a list.
 
-### Drag and drop
+### Dock
 
-Drag a result out of the launcher and drop it anywhere:
+The dock appears when the pointer touches the bottom edge of a screen, and hides when you move away. To keep it on screen, turn on **Keep the dock visible** in Settings; maximized windows then stop above it. Full-screen apps hide it.
 
-- **Files and folders** into a chat, an email, an upload box or a folder. The original stays where it is.
-- **Apps** onto the desktop or into a folder, to make a shortcut.
-- **Text**, such as a result, the time or a path, into any text box.
-- **Links and web searches** into a browser or a chat.
+| Do this | To |
+| --- | --- |
+| Click an app | Switch to it, or start it if it is pinned and closed |
+| Click the app in front | Minimize it |
+| Middle-click an app | Open a new window of it |
+| Hover an app with several windows | See its windows. Click one to switch to it, middle-click to close it. |
+| Right-click an app | Pin or unpin it, close its windows, or open its Jump List |
+| Drag an app sideways | Rearrange it; drop among pins to pin it, or among running apps to unpin it |
+| Drag the search button, a gap beside the apps, **⌄**, a status icon or the clock | Move that whole section |
+| Click a tray icon | Use it as you would on the taskbar |
+| Click **⌄** | Show the hidden tray icons |
+| Right-click **⌄** | Show the taskbar, or open taskbar settings |
+| Click a status icon | Open Now |
+| Scroll over sound | Change the volume by 2% a notch |
+| Right-click a status icon | Open its Windows settings page |
+| Click the clock | Open notifications and the calendar |
+| Scroll anywhere else | Switch virtual desktops |
+| <kbd>Shift</kbd>+scroll | Scroll through the apps |
 
-Press <kbd>Esc</kbd> to cancel a drag.
+Pinned apps sit before running apps. Tray icons you pin in Windows show in the dock; the rest are behind **⌄**.
 
-## Settings
+Sound, battery, Wi-Fi and Bluetooth sit in one group. In Settings, under **Status**, give any of them its own icon or hide it.
 
-Open **Settings** from Wisp's tray icon, or edit `%APPDATA%\wisp\config.toml`. The tray icon also has **Rescan apps**, **Start with Windows** and **Quit**.
+If Wisp quits or crashes, the taskbar comes back with every tray icon.
+
+## Configuration
+
+Open **Settings** by typing `settings` in the launcher or from Wisp's tray icon, or edit `%APPDATA%\wisp\config.toml`. The tray icon also has **Rescan apps**, **Start with Windows** and **Quit**.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `hotkey` | `"Alt+Space"` | Shows or hides the launcher |
-| `win_key` | `false` | Tap either Windows key alone to show or hide Wisp instead of Start. Replaces `hotkey` while on |
-| `dock` | `true` | Shows the dock |
-| `dock_autohide` | `true` | Hides the dock until the pointer touches the bottom edge. `false` keeps it visible. |
-| `dock_search_button` | `true` | Shows the search button at the start of the dock. `false` hides it; the hotkey still opens the launcher. |
-| `window_list` | `"multiple"` | `"multiple"` lists an app's windows when it has more than one; `"always"` or `"off"` |
-| `dock_order` | `["launcher", "apps", "tray", "status", "sound", "battery", "wifi", "bluetooth", "clock"]` | Sections from left to right; drag sections to change it. |
-| `dock_status_group` | `["sound", "battery", "wifi", "bluetooth"]` | Items in the status group, in home-cell order. |
-| `dock_status_icons` | `[]` | Items with their own draggable slot; items in neither list are hidden. The group wins if an item is in both lists. |
-| `dock_icon_size` | `32` | App icon size in the dock, 24–40 DIP. The dock's height, spacing and status area scale with it. |
-| `dock_color` | `""` | The color of the dock and the launcher, as `"#RRGGBB"`, or `"#RRGGBBAA"` where `AA` sets how strongly it covers the theme's acrylic. Mica and solid show the color at full strength. Text turns light or dark to stay readable, and follows the theme below 40% strength. Empty, or a value that is not a color, uses the theme's colors |
-| `hide_taskbar` | `true` | Hides the Windows taskbar while Wisp runs |
-| `position` | `"bottom"` | `"bottom"` grows the launcher from the dock; `"center"` opens it in the middle |
+| `win_key` | `false` | Tap either Windows key alone to show or hide Wisp instead of Start. Replaces `hotkey` while on. |
+| `max_results` | `8` | Results visible at once |
 | `theme` | `"system"` | `"system"`, `"dark"` or `"light"` |
 | `backdrop` | `"acrylic"` | `"acrylic"`, `"mica"` or `"solid"` |
-| `max_results` | `8` | Results visible at once |
+| `position` | `"bottom"` | `"bottom"` grows the launcher from the dock; `"center"` opens it in the middle |
 | `show_recent` | `true` | Shows recent apps when the box is empty |
-| `file_search` | `true` | Searches file names |
-| `file_search_everything` | `true` | Searches with [Everything](https://www.voidtools.com/) when it's running, on every drive. Otherwise Wisp uses the Windows Search index |
-| `file_search_exclude` | `["node_modules", …]` | Folder names file search skips |
 | `search_url` | Google | Web search URL. `{query}` is replaced by your search. |
+| `file_search` | `true` | Searches file names |
+| `file_search_everything` | `true` | Searches with [Everything](https://www.voidtools.com/) when it's running, on every drive. Otherwise Wisp uses the Windows Search index. |
+| `file_search_exclude` | `["node_modules", …]` | Folder names file search skips. Names that start with a dot are always skipped. |
 | `check_for_updates` | `true` | Checks daily for new stable releases, except on metered connections |
+| `hide_taskbar` | `true` | Hides the Windows taskbar while Wisp runs |
+| `dock` | `true` | Shows the dock |
+| `dock_autohide` | `true` | Hides the dock until the pointer touches the bottom edge. `false` keeps it visible on the main screen. |
+| `dock_search_button` | `true` | Shows the search button at the start of the dock |
+| `window_list` | `"multiple"` | `"multiple"` lists an app's windows on hover when it has more than one; `"always"` or `"off"` |
+| `dock_icon_size` | `32` | App icon size in the dock, 24–40 DIP |
+| `dock_order` | `["launcher", "apps", "tray", "status", "sound", "battery", "wifi", "bluetooth", "clock"]` | Sections from left to right |
+| `dock_status_group` | `["sound", "battery", "wifi", "bluetooth"]` | Items in the status group |
+| `dock_status_icons` | `[]` | Items with their own icon. Items in neither list are hidden. |
+| `dock_color` | `""` | The color of the dock and the launcher, as `"#RRGGBB"`, or `"#RRGGBBAA"` where `AA` sets how strongly it covers the theme's acrylic. Mica and solid show it at full strength. Empty uses the theme's colors. |
 
 Configs from Wisp 0.3 keep the taskbar. To switch, set `dock` and `hide_taskbar` to `true` and `position` to `"bottom"`.
 
@@ -202,7 +198,7 @@ The dock grows into the launcher in 155 ms. A hidden dock uses almost no CPU. [`
 - **Apps:** Wisp reads `shell:AppsFolder`, the same list Start uses.
 - **Files:** Wisp asks Everything over window messages when it's running, and the Windows Search index otherwise, on a worker thread.
 
-## Build
+## Build from source
 
 Install [Rust](https://rustup.rs) and the Windows SDK, then:
 
@@ -214,7 +210,9 @@ cargo build --release --workspace
 
 To try your changes without touching your installed Wisp, run `scripts\install-nightly.ps1`. It installs **Wisp Nightly** with its own folder, config and shortcut (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd>).
 
-To contribute, see [CONTRIBUTING.md](CONTRIBUTING.md).
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
