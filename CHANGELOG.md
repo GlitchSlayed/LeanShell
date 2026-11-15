@@ -6,33 +6,32 @@ User-facing changes in each release. Each release on GitHub lists these notes an
 
 ### New
 
-- Type `wisp` or `settings` in the launcher to open Wisp's Settings, also while the taskbar and its tray icon are hidden. (#86)
-- Find Windows tools by their program name, such as `cmd`, `taskmgr` or `regedit`, whatever the language of Windows. (#89, fixes #84)
 - Right-click an app in the dock for its Jump List: its recent files and its own tasks, as on the taskbar. (#90, fixes #74)
-- Open or close the launcher by tapping the Windows key alone. Turn on Use Win key in Settings, under Shortcut; it replaces your shortcut, and Windows shortcuts such as Win+E still work. (#80)
-- Hide the search button in the dock: turn off Search button in Settings, under Dock, or set `dock_search_button = false`. Your shortcut still opens the launcher. (#81, by @SorbetMango, fixes #79; #82)
-- Turn Night Light on or off and switch Windows between dark and light mode from the launcher: type `theme`, `dark` or `light` for one toggle. Minimize, maximize, restore, close or keep on top the window you opened it over. (#76, #78, fixes #62)
-- Wisp checks daily for stable updates and shows a notification once per version, with an update row in the launcher. Turn checks off in Settings. Metered connections and Nightly builds skip checks. (#77, fixes #43)
 - Choose a color for the dock and the launcher in Settings, under Appearance > Advanced. Turn on Custom dock color, then pick a preset, set hue, saturation, lightness and alpha, or type a hex value or red, green and blue numbers. Text turns light or dark to stay readable, and with Acrylic the color's alpha sets how much of the theme's acrylic shows through. Turning the switch off returns to the theme's colors. (#72, by @Kendoismebutmaybenot, fixes #60)
-- A dock app's right-click menu shows an arrow beside its name, opening New window, Run as administrator, Open file location and Properties. Pin to dock or Unpin from dock stays in the main menu. Close window or Close all windows shows when the app has windows, and End task shows when it is turned on for the taskbar in Windows Settings (System > For developers). Items that don't apply are hidden. (#73, by @Kendoismebutmaybenot)
-- File search also finds words inside file names, such as `report` in `bug-reporting.txt`. When [Everything](https://www.voidtools.com/) is running, it asks Everything instead of the Windows index, so it also finds files on other drives and in folders the index skips; turn this off in Settings, under Files. (#57, by @RayTrunk, fixes #56)
+- Open or close the launcher by tapping the Windows key alone. Turn on Use Win key in Settings, under Launcher; it replaces your shortcut, and Windows shortcuts such as Win+E still work. (#80)
+- Turn Night Light on or off and switch Windows between dark and light mode from the launcher: type `night light`, or `theme`, `dark` or `light` for one toggle. Minimize, maximize, restore, close or keep on top the window you opened the launcher over. (#76, #78, fixes #62)
+- File search also finds words inside file names, such as `report` in `bug-reporting.txt`. When [Everything](https://www.voidtools.com/) is running, Wisp asks it instead of the Windows index, so it also finds files on other drives and in folders the index skips; turn this off in Settings, under Files. (#57, by @RayTrunk, fixes #56)
+- Wisp checks daily for stable updates and shows a notification once per version, with an update row in the launcher. Turn checks off in Settings. Metered connections and Nightly builds skip checks. (#77, fixes #43)
 - When an update is available, the launcher shows a What's new row under it, opening the release notes, and the update notification opens Settings, where What's new sits beside Update. (#97, fixes #94)
+- A dock app's right-click menu shows an arrow beside its name, opening New window, Run as administrator, Open file location and Properties. Pin to dock or Unpin from dock stays in the main menu. Close window or Close all windows shows when the app has windows, and End task shows when it is turned on for the taskbar in Windows Settings (System > For developers). Items that don't apply are hidden. (#73, by @Kendoismebutmaybenot)
+- Hide the search button in the dock: turn off Search button in Settings, under Dock, or set `dock_search_button = false`. Your shortcut still opens the launcher. (#81, #82, by @SorbetMango, fixes #79)
+- Find Windows tools by their program name, such as `cmd`, `taskmgr` or `regedit`, whatever the language of Windows. (#89, fixes #84)
+- Type `wisp` or `settings` in the launcher to open Wisp's Settings, also while the taskbar and its tray icon are hidden. (#86)
+- Hibernate from the launcher when the PC supports hibernation and has a hibernation file. (#87, fixes #83)
 
 ### Fixes
 
-- Drag the volume sliders in the launcher: a slider follows the mouse while you hold the button, even past its ends, instead of jumping only when you let go. Clicking the speaker beside the main volume mutes or unmutes. (#98, by @dogancemd)
-- Setting the volume to 0% mutes, as the Windows volume slider does. Some devices still played quietly at the lowest level. (#98, by @dogancemd)
 - Wisp no longer quits, and the dock no longer gets stuck, when the dock changes while one of its menus is open. The dock keeps updating while a menu or a "Run as administrator" prompt is open. A crash now leaves a note in `wisp.log`. (#93, fixes #91)
-- The dock redraws at once after changing its icon size or turning autohide off, instead of showing a cut-off or empty dock for a second or two. (#93)
-- The dock uses less CPU: it no longer wakes ten times a second to read the clock, volume and battery, no longer works while you drag other windows, and hides and restores the taskbar without holding up its own drawing. (#93)
+- Windows Terminal and other Microsoft Store apps whose windows don't name their app now group with their pinned icon, and start from the dock. Before, a pinned Terminal did nothing when clicked. Pins made from such an app move to it on their own. (#73, by @Kendoismebutmaybenot)
+- The dock shows when the pointer reaches the bottom of a screen with another screen below it. (#88, fixes #70)
 - A fullscreen app on another screen no longer hides the dock. (#93)
 - Switching to an app that has stopped responding no longer freezes the dock. (#93)
-- The dock shows when the pointer reaches the bottom of a screen with another screen below it. (#88, fixes #70)
-
-- Hibernate from the launcher when the PC supports hibernation and has a hibernation file. (#87, fixes #83)
+- The dock redraws at once after changing its icon size or turning autohide off, instead of showing a cut-off or empty dock for a second or two. (#93)
+- The dock uses less CPU: it no longer wakes ten times a second to read the clock, volume and battery, no longer works while you drag other windows, and hides and restores the taskbar without holding up its own drawing. (#93)
+- The volume sliders in the launcher follow the mouse while you hold the button, even past their ends, instead of jumping only when you let go. Clicking the speaker beside the main volume mutes or unmutes. (#98, by @dogancemd)
+- Setting the volume to 0% mutes, as the Windows volume slider does. Before, some devices still played quietly at the lowest level. (#98, by @dogancemd)
 - Pressing a toggle in the launcher many times in a row, such as Bluetooth, Wi-Fi, dark mode or play/pause, no longer keeps Windows switching for seconds afterwards: only the last press is applied. (#78)
-- Keep the launcher's backdrop and border consistent at the bottom and center of the screen, in both light and dark themes. (#75, fixes #45)
-- Windows Terminal and other Microsoft Store apps whose windows don't name their app now group with their pinned icon, and start from the dock. Before, a pinned Terminal did nothing when clicked. Pins made from such an app move to it on their own. (#73, by @Kendoismebutmaybenot)
+- The launcher's backdrop and border look the same at the bottom and center of the screen, in both light and dark themes. (#75, fixes #45)
 
 ## 0.7.0 - 2026-11-12
 
