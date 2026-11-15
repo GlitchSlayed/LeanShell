@@ -328,7 +328,11 @@ pub fn run() -> Result<()> {
                     std::thread::park();
                     continue;
                 }
-                let _ = windows::Win32::Graphics::Dwm::DwmFlush();
+                // Without composition to wait for, such as with the display
+                // off, keep roughly its pace instead of spinning.
+                if windows::Win32::Graphics::Dwm::DwmFlush().is_err() {
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                }
                 if !frame_pending.swap(true, Ordering::AcqRel) {
                     let _ = PostMessageW(Some(HWND(window as _)), WM_APP_FRAME, WPARAM(0), LPARAM(0));
                 }
@@ -456,6 +460,9 @@ struct Morph {
     start: Instant,
     opening: bool,
     from_opacity: f32,
+    /// As of the last frame, so its bounds and its fades come from one
+    /// reading of the clock.
+    progress: f32,
 }
 
 /// A surface shown instead of the results. The query filters its widgets.
@@ -903,6 +910,7 @@ impl Launcher {
             start: Instant::now(),
             opening: true,
             from_opacity: opacity,
+            progress: 0.0,
         });
         if !self.visible {
             self.previous_foreground = unsafe { GetForegroundWindow() };
@@ -1178,8 +1186,7 @@ impl Launcher {
 
     fn morph_opacity(&self) -> f32 {
         self.morph.as_ref().map_or(if self.visible { 1.0 } else { 0.0 }, |m| {
-            let t = self.morph_progress(m);
-            m.from_opacity + ((if m.opening { 1.0 } else { 0.0 }) - m.from_opacity) * t
+            m.from_opacity + ((if m.opening { 1.0 } else { 0.0 }) - m.from_opacity) * m.progress
         })
     }
 
@@ -1199,20 +1206,21 @@ impl Launcher {
 
     fn begin_morph(&mut self, from: RECT, to: RECT, opening: bool, from_opacity: f32) {
         util::perf::event("morph_begin");
-        self.morph = Some(Morph {
-            from,
-            to,
-            start: Instant::now(),
-            opening,
-            from_opacity,
-        });
         // Composition acrylic re-blurs on every resize. Use its solid tint during
         // motion, then restore the live material once the geometry settles.
         self.palette =
             crate::theme::apply_moving_backdrop(self.hwnd, self.dark, self.config.backdrop, self.config.dock_tint());
         // The window no longer has the material `apply_theme` last set.
         self.material = None;
-        self.morph.as_mut().unwrap().start = Instant::now();
+        // The clock starts once the backdrop is set, which can take a moment.
+        self.morph = Some(Morph {
+            from,
+            to,
+            start: Instant::now(),
+            opening,
+            from_opacity,
+            progress: 0.0,
+        });
         request_frames();
         self.outline = Some(from);
         self.set_bounds(from);
@@ -1257,7 +1265,12 @@ impl Launcher {
         if opening {
             capture::type_during_morph(self);
         }
-        let rect = crate::morph::bounds(from, self.morph.as_ref().map_or(to, |m| m.to), t);
+        // Typing can change the target.
+        let to = self.morph.as_mut().map_or(to, |m| {
+            m.progress = t;
+            m.to
+        });
+        let rect = crate::morph::bounds(from, to, t);
         self.outline = Some(rect);
         self.place_bounds(rect, false);
         self.paint();

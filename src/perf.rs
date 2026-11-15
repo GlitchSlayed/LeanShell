@@ -81,10 +81,14 @@ mod enabled {
     }
     /// How many times slower animations run, for smooth screen recordings.
     pub fn slowdown() -> f32 {
-        hook("WISP_CAPTURE_SLOWDOWN")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1.0f32)
-            .max(1.0)
+        // Read once: every animation frame asks.
+        static SLOWDOWN: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+        *SLOWDOWN.get_or_init(|| {
+            hook("WISP_CAPTURE_SLOWDOWN")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1.0f32)
+                .max(1.0)
+        })
     }
     pub fn present() {
         let now = ticks();

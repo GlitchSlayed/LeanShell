@@ -1003,7 +1003,7 @@ impl Dock {
     }
 
     pub fn animating(&self) -> bool {
-        // Keep frames requested while a menu may be holding an animation.
+        // While a handler holds the state, assume so: the frame is applied once it lets go.
         self.state
             .try_borrow()
             .map(|s| s.slide.is_some() || s.hover_tick.is_some())
