@@ -354,8 +354,14 @@ pub fn run() -> Result<()> {
         alive.store(false, Ordering::Release);
         pacing.thread().unpark();
         let _ = pacing.join();
-        LAUNCHER.with(|cell| cell.borrow_mut().take());
+        {
+            let _span = util::perf::Span::new("quit_launcher");
+            LAUNCHER.with(|cell| cell.borrow_mut().take());
+        }
+        util::perf::event("quit_com");
     }
+    // After COM and OLE are released, which can wait as well.
+    util::perf::event("quit_done");
     Ok(())
 }
 
@@ -2516,21 +2522,34 @@ impl Launcher {
         }
     }
 
+    /// Each step can wait on Explorer or another thread, so a trace times
+    /// them apart.
     fn shutdown(&mut self) {
-        self.win_key_hook = None;
-        self.dock = None;
-        if let Some(Err(e)) = self.taskbar.take().map(TaskbarWorker::shutdown) {
-            eprintln!("could not restore the taskbar: {e}");
+        {
+            let _span = util::perf::Span::new("quit_win_key");
+            self.win_key_hook = None;
+        }
+        {
+            let _span = util::perf::Span::new("quit_dock");
+            self.dock = None;
+        }
+        {
+            let _span = util::perf::Span::new("quit_taskbar");
+            if let Some(Err(e)) = self.taskbar.take().map(TaskbarWorker::shutdown) {
+                eprintln!("could not restore the taskbar: {e}");
+            }
         }
         // Removed last, so Windows works the work area out again from the
         // restored taskbar and the remaining app bars. Waits, so the space
         // is back before Wisp exits.
         if let Some(space) = self.dock_space.take() {
+            let _span = util::perf::Span::new("quit_dock_space");
             space.close();
         }
         unsafe {
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_ID);
         }
+        let _span = util::perf::Span::new("quit_tray_icon");
         tray::remove(self.hwnd);
     }
 }
