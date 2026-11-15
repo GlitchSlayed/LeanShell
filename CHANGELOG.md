@@ -26,6 +26,7 @@ User-facing changes in each release. Each release on GitHub lists these notes an
 - The dock shows when the pointer reaches the bottom of a screen with another screen below it. (#88, fixes #70)
 - A fullscreen app on another screen no longer hides the dock. (#93)
 - Switching to an app that has stopped responding no longer freezes the dock. (#93)
+- Quitting no longer stalls for seconds with Keep the dock visible on.
 - The dock redraws at once after changing its icon size or turning autohide off, instead of showing a cut-off or empty dock for a second or two. (#93)
 - The dock uses less CPU: it no longer wakes ten times a second to read the clock, volume and battery, no longer works while you drag other windows, and hides and restores the taskbar without holding up its own drawing. (#93)
 - The volume sliders in the launcher follow the mouse while you hold the button, even past their ends, instead of jumping only when you let go. Clicking the speaker beside the main volume mutes or unmutes. (#98, by @dogancemd)
