@@ -1126,6 +1126,12 @@ impl Launcher {
     }
 
     fn set_bounds(&mut self, rect: RECT) {
+        self.place_bounds(rect, true);
+    }
+
+    /// `raise` also brings the window above other topmost ones. The frames of
+    /// a morph skip that: its first frame did it.
+    fn place_bounds(&mut self, rect: RECT, raise: bool) {
         let _span = util::perf::Span::new("bounds");
         let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
         unsafe {
@@ -1136,14 +1142,19 @@ impl Launcher {
                 rect.top,
                 width,
                 height,
-                SWP_NOACTIVATE,
+                if raise {
+                    SWP_NOACTIVATE
+                } else {
+                    SWP_NOACTIVATE | SWP_NOZORDER
+                },
             );
         }
         self.renderer.resize(width.max(1) as u32, height.max(1) as u32);
+        // The dock tells other apps where its icons are once the morph ends.
         if self.morph.is_some()
             && let Some(dock) = &mut self.dock
         {
-            dock.surface_rect(rect);
+            dock.surface_rect(rect, false);
         }
     }
 
@@ -1214,7 +1225,13 @@ impl Launcher {
             return;
         };
         self.apply_theme();
-        if !morph.opening {
+        if morph.opening {
+            if let Some(rect) = self.outline
+                && let Some(dock) = &mut self.dock
+            {
+                dock.surface_rect(rect, true);
+            }
+        } else {
             self.outline = None;
             if let Some(rect) = self.dock.as_ref().map(Dock::resting_rect) {
                 self.set_bounds(rect);
@@ -1242,8 +1259,12 @@ impl Launcher {
         }
         let rect = crate::morph::bounds(from, self.morph.as_ref().map_or(to, |m| m.to), t);
         self.outline = Some(rect);
-        self.set_bounds(rect);
+        self.place_bounds(rect, false);
         self.paint();
+        // The frame is drawn: a WM_PAINT for the resize would draw it again.
+        unsafe {
+            let _ = ValidateRect(Some(self.hwnd), None);
+        }
         if t >= 1.0 {
             self.finish_morph();
         }

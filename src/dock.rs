@@ -1058,15 +1058,21 @@ impl Dock {
             s.visible = true;
             s.away = 0;
             s.stop_slide();
+            // The icons are back at rest, whether or not `refresh` lays out again.
+            s.publish_rects();
             s.refresh();
             s.start_poll(POLL_MS);
         });
     }
 
-    pub fn surface_rect(&mut self, rect: RECT) {
+    /// Where the launcher's window is while the dock is part of it. `settled`
+    /// once it stops moving, which is when other apps are told.
+    pub fn surface_rect(&mut self, rect: RECT, settled: bool) {
         self.update(Some("surface_rect"), move |s| {
             s.surface_rect = Some(rect);
-            s.publish_rects();
+            if settled {
+                s.publish_rects();
+            }
         });
     }
 
