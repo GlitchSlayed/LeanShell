@@ -1,10 +1,14 @@
-//! Night Light's CloudStore state, on demand. Unknown layouts are read-only.
+//! Night Light's CloudStore state, on demand.
+//!
+//! Windows does not document this value. A layout this module does not know
+//! is never written over and never read as a state: the launcher then offers
+//! the Windows Settings page instead of a toggle.
 //!
 //! Format and timestamp research: kvnxiao/win-nightlight-cli,
 //! docs/nightlight-registry-format.md (Windows 11 builds 26100 and 26300).
 //! This deliberately accepts only the known schema rather than guessing offsets.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows::Win32::System::Registry::*;
 use windows::core::{PCWSTR, w};
 
@@ -13,7 +17,7 @@ const KEY: PCWSTR = w!(
 );
 const HEADER: &[u8] = &[0x43, 0x42, 1, 0];
 const PREFIX: &[u8] = &[0x43, 0x42, 1, 0, 0x0a, 2, 1, 0, 0x2a, 6];
-const UNSUPPORTED: &str = "Windows did not provide a supported Night Light state.";
+const UNSUPPORTED: &str = "Wisp can't change Night Light on this PC. Use Settings > System > Display > Night light.";
 
 #[derive(Debug, PartialEq)]
 struct State {
@@ -139,19 +143,40 @@ fn read_bytes() -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// The value that turns Night Light `on`, with its stamp; `None` if it is on
+/// or off already. `now` is the time since the Unix epoch.
+///
+/// Fails for a layout `parse` does not know, and for a value that would not
+/// read back as asked, so nothing guessed is ever written.
+fn rewrite(original: &[u8], on: bool, highest: u64, now: Duration) -> Result<Option<(Vec<u8>, u64)>, &'static str> {
+    let state = parse(original).filter(|s| s.usable).ok_or(UNSUPPORTED)?;
+    if state.on == on {
+        return Ok(None);
+    }
+    let modified = next_stamp(state.modified, highest, now.as_secs()).ok_or(UNSUPPORTED)?;
+    let filetime = u64::try_from(now.as_nanos() / 100 + 116_444_736_000_000_000).map_err(|_| UNSUPPORTED)?;
+    let bytes = encode(on, modified, filetime);
+    let expected = State {
+        on,
+        modified,
+        usable: true,
+    };
+    if parse(&bytes) != Some(expected) {
+        return Err(UNSUPPORTED);
+    }
+    Ok(Some((bytes, modified)))
+}
+
 /// Called only by the commands worker, which retains its highest write stamp.
 pub fn set(on: bool, highest: &mut u64) -> Result<(), String> {
-    let original = read_bytes()?;
-    let state = parse(&original).filter(|s| s.usable).ok_or(UNSUPPORTED)?;
-    if state.on == on {
-        return Ok(());
-    }
+    // A missing or oversized value is as unknown as an unknown layout.
+    let original = read_bytes().map_err(|_| UNSUPPORTED)?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?;
-    let modified = next_stamp(state.modified, *highest, now.as_secs()).ok_or(UNSUPPORTED)?;
-    let filetime = u64::try_from(now.as_nanos() / 100 + 116_444_736_000_000_000).map_err(|_| UNSUPPORTED)?;
-    let bytes = encode(on, modified, filetime);
+    let Some((bytes, modified)) = rewrite(&original, on, *highest, now)? else {
+        return Ok(());
+    };
     // Do not overwrite a change made while this command was preparing its write.
     if read_bytes()? != original {
         return Err("Night Light changed. Try again.".into());
@@ -202,6 +227,64 @@ mod tests {
             unknown[18] += 1; // Keep the payload length valid, so the unknown field is rejected.
             assert!(parse(&unknown).is_none());
         }
+    }
+    #[test]
+    fn never_rewrites_an_unknown_or_unusable_value() {
+        let now = Duration::from_secs(1_800_000_100);
+        let known = encode(false, 1_800_000_000, 134_000_000_000_000_000);
+        // A known value turns on with a newer stamp, and is left alone when already so.
+        let (bytes, stamp) = rewrite(&known, true, 0, now).unwrap().unwrap();
+        assert_eq!(stamp, 1_800_000_100);
+        assert_eq!(
+            parse(&bytes),
+            Some(State {
+                on: true,
+                modified: stamp,
+                usable: true
+            })
+        );
+        assert_eq!(rewrite(&known, false, 0, now), Ok(None));
+
+        // An unknown field, with the payload length kept valid.
+        let mut field = known.clone();
+        field.insert(field.len() - 4, 0x42);
+        field[18] += 1;
+        // An unknown transition value.
+        let mut transition = known.clone();
+        assert_eq!(transition[25], 2);
+        transition[25] = 3;
+        // A newer header version.
+        let mut version = known.clone();
+        version[2] = 2;
+        // Bytes after the known end.
+        let mut longer = known.clone();
+        longer.push(0);
+        // Windows says Night Light is unavailable.
+        let mut unavailable = known.clone();
+        let index = unavailable.len() - 4;
+        unavailable.splice(index..index, [0xc2, 0x1e, 0]);
+        unavailable[18] += 3;
+        assert!(parse(&unavailable).is_some_and(|s| !s.usable));
+
+        let unknown: [&[u8]; 9] = [
+            &[],
+            &[0],
+            &[0xff; 64],
+            &known[..known.len() - 1],
+            &field,
+            &transition,
+            &version,
+            &longer,
+            &unavailable,
+        ];
+        for bytes in unknown {
+            for on in [false, true] {
+                assert_eq!(rewrite(bytes, on, 0, now), Err(UNSUPPORTED), "{bytes:x?}");
+            }
+        }
+        // A stamp that cannot rise is refused as well.
+        let last = encode(false, u64::MAX, 0);
+        assert_eq!(rewrite(&last, true, 0, now), Err(UNSUPPORTED));
     }
     #[test]
     fn reads_captured_26300_state_and_rejects_unknown_layouts() {
