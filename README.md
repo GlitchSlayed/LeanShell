@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>A dock and a launcher for Windows.</b><br>
-  Replaces the taskbar. One ~1.5 MB executable.
+  Replaces the taskbar. The dock and launcher are one 2.2 MB executable.
 </p>
 
 <p align="center">
@@ -41,7 +41,7 @@ winget install SumirSeth.Wisp
 Update that install with `winget upgrade SumirSeth.Wisp`.
 
 > [!NOTE]
-Enable **Use Win key** in Settings to open Wisp by tapping either Windows key alone, instead of your shortcut. Windows shortcuts and Win+click still work. With an elevated app in front, Windows may block the hook or its mask key (UIPI), so Start can open as usual.
+> Enable **Use Win key** in Settings to open Wisp by tapping either Windows key alone, instead of your shortcut. Windows shortcuts and Win+click still work. With an elevated app in front, Windows may block the hook or its mask key (UIPI), so Start can open as usual.
 
 > PowerToys Run also uses <kbd>Alt</kbd>+<kbd>Space</kbd>. Turn it off, or change Wisp's shortcut.
 
@@ -100,15 +100,15 @@ Type to search, then press <kbd>Enter</kbd>.
 | `^vis` · `term$` · `'note` · `!edge` | Match the start · the end · exactly · exclude |
 | `sqrt(2) * 10` | Calculate. <kbd>Enter</kbd> copies the result. |
 | `> ipconfig` | Run a command in Command Prompt |
-| `night light` ? `night light off` | Turn Night Light on or off. The row shows its current state; Settings stays available. |
-| `dark mode` ? `light mode` | Change both Windows and app color modes. |
-| `minimize` ? `maximize` ? `restore` ? `close window` ? `always on top` | Control the window you opened the launcher over. Its title appears below the action. |
+| `night light` · `night light off` | Turn Night Light on or off. The row shows its current state. Where Wisp can't read that state, it offers the Windows Settings page instead. |
+| `theme` · `dark mode` · `light mode` | Switch Windows and apps between dark and light mode. One row offers the mode that isn't on. |
+| `minimize` · `maximize` · `restore` · `close window` · `always on top` | Control the window you opened the launcher over. Its title appears below the action. |
 | `wifi off` · `bt` · `vol 40` · `mute` | Change a setting. <kbd>Tab</kbd> lists networks, devices or outputs. |
 | `play` · `pause` · `next` | Control media |
 | `w code` | Switch to an open window |
 | `lock` · `sleep` · `hibernate` · `restart` · `shut down` | Lock or power off. Hibernate appears when Windows allows it. Some ask for a second <kbd>Enter</kbd>. |
 | `time tokyo` · `date` | Copy a time or the date |
-| `dark mode` · `display` · … | Open that Settings page |
+| `display` · `colors` · … | Open that Windows Settings page |
 | `now` · `sound` | Open live panels for status and audio |
 | `wisp` · `settings` | Open Wisp's Settings |
 | `quit` | Quit Wisp |
@@ -174,6 +174,7 @@ Open **Settings** from Wisp's tray icon, or edit `%APPDATA%\wisp\config.toml`. T
 | `file_search_everything` | `true` | Searches with [Everything](https://www.voidtools.com/) when it's running, on every drive. Otherwise Wisp uses the Windows Search index |
 | `file_search_exclude` | `["node_modules", …]` | Folder names file search skips |
 | `search_url` | Google | Web search URL. `{query}` is replaced by your search. |
+| `check_for_updates` | `true` | Checks daily for new stable releases, except on metered connections |
 
 Configs from Wisp 0.3 keep the taskbar. To switch, set `dock` and `hide_taskbar` to `true` and `position` to `"bottom"`.
 
@@ -188,7 +189,7 @@ Wisp 0.2.0 against PowerToys Run 0.94 on the same PC, median of 30 runs:
 | Typing → first results | **24 ms** | 200 ms |
 | Shortcut → launcher drawn | **15 ms** | 30 ms |
 | Memory | **20 MB** | 302 MB |
-| Size on disk | **1.5 MB** (0.4.0) | 794 MB |
+| Size on disk | **2.2 MB** (0.8.0) | 794 MB |
 
 The dock grows into the launcher in 155 ms. A hidden dock uses almost no CPU. [`bench/`](bench) has the method and full results.
 
