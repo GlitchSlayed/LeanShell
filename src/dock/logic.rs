@@ -291,6 +291,10 @@ pub const ICON_CENTER_Y: f32 = 26.0;
 pub const INDICATOR_TOP: f32 = 46.0;
 
 pub fn slide_value(from: f32, to: f32, progress: f32) -> f32 {
+    // Exactly the end, without the rounding of the sum below.
+    if progress >= 1.0 {
+        return to;
+    }
     let t = progress.clamp(0.0, 1.0);
     let ease = t * t * (3.0 - 2.0 * t);
     from + (to - from) * ease
@@ -1539,6 +1543,14 @@ mod tests {
         assert_eq!(slide_value(midway, 0.0, 0.0), midway);
         assert!(slide_value(midway, 0.0, 0.1) < midway);
         assert_eq!(slide_value(0.0, 1.0, 2.0), 1.0);
+        // A reversed slide starts anywhere, and still ends exactly at rest.
+        for i in 0..=1000 {
+            let from = i as f32 / 1000.0;
+            for to in [0.0, 1.0] {
+                assert_eq!(slide_value(from, to, 1.0), to);
+                assert_eq!(slide_value(from, to, 1.3), to);
+            }
+        }
     }
     #[test]
     fn stable_order_keeps_first_seen_positions() {

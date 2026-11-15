@@ -1893,13 +1893,18 @@ impl State {
         self.refresh();
     }
 
+    /// How far through its time a running slide is: 1 or more once it is over.
+    fn slide_progress(&self) -> Option<f32> {
+        self.slide
+            .map(|start| start.elapsed().as_secs_f32() * 1000.0 / crate::util::perf::slowdown() / SLIDE_MS)
+    }
+
     fn slide_value(&self) -> f32 {
-        let Some(start) = self.slide else { return self.slide_to };
-        logic::slide_value(
-            self.slide_from,
-            self.slide_to,
-            start.elapsed().as_secs_f32() * 1000.0 / crate::util::perf::slowdown() / SLIDE_MS,
-        )
+        self.slide_value_at(self.slide_progress())
+    }
+
+    fn slide_value_at(&self, progress: Option<f32>) -> f32 {
+        progress.map_or(self.slide_to, |t| logic::slide_value(self.slide_from, self.slide_to, t))
     }
 
     fn start_slide(&mut self, to: f32) {
@@ -1932,9 +1937,12 @@ impl State {
     }
 
     fn slide_offset(&self, height: i32) -> i32 {
+        self.slide_offset_at(height, self.slide_value())
+    }
+
+    fn slide_offset_at(&self, height: i32, value: f32) -> i32 {
         let layout_scale = logic::layout_scale(self.app_icon_size);
-        ((height + (logic::margin(layout_scale) * self.dpi as f32 / 96.0).round() as i32) as f32 * self.slide_value())
-            .round() as i32
+        ((height + (logic::margin(layout_scale) * self.dpi as f32 / 96.0).round() as i32) as f32 * value).round() as i32
     }
 
     fn step_slide(&mut self) {
@@ -1942,10 +1950,16 @@ impl State {
         crate::util::perf::event("slide_frame");
         let tick = Instant::now();
         let elapsed = self.slide.map_or(0.0, |s| s.elapsed().as_secs_f64() * 1000.0);
+        // One reading of the clock places the dock and decides whether the
+        // slide is over, so the last frame is always the resting place.
+        let progress = self.slide_progress();
         unsafe {
             // `left`, `width` and the height are known from `place`.
             let height = logic::height(logic::layout_scale(self.app_icon_size));
-            let offset = self.slide_offset((height * self.dpi as f32 / 96.0).round() as i32);
+            let offset = self.slide_offset_at(
+                (height * self.dpi as f32 / 96.0).round() as i32,
+                self.slide_value_at(progress),
+            );
             let _ = SetWindowPos(
                 self.hwnd,
                 None,
@@ -1955,10 +1969,7 @@ impl State {
                 0,
                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
-            if self
-                .slide
-                .is_some_and(|start| start.elapsed().as_secs_f32() * 1000.0 / crate::util::perf::slowdown() >= SLIDE_MS)
-            {
+            if progress.is_some_and(|t| t >= 1.0) {
                 self.slide = None;
                 let _ = KillTimer(Some(self.hwnd), SLIDE_TIMER);
                 if !self.revealed {
