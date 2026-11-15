@@ -4,10 +4,12 @@
 //! and gives the space back when the app bar is removed or Wisp exits.
 
 use std::cell::Cell;
+use std::os::windows::io::AsRawHandle;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{E_FAIL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{E_FAIL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
 };
@@ -48,6 +50,10 @@ thread_local! {
 
 /// Checks between fresh registrations while Windows will not keep the space.
 const REREGISTER_EVERY: u32 = 10;
+
+/// How long quitting waits for the space to be given back. Explorer answers
+/// within its own 5 s limit, so this only ends a wait that went wrong.
+const CLOSE_WAIT: Duration = Duration::from_secs(5);
 
 /// The space lives on its own thread: Explorer answers an app bar message
 /// that changes the work area only after every window has seen the change,
@@ -101,10 +107,29 @@ impl DockSpace {
     }
 
     /// Gives the space back and waits until Windows has, as before exiting.
+    ///
+    /// Removing the app bar makes Explorer tell every window about the new
+    /// work area and wait for each, the caller's too. So this answers sent
+    /// messages while it waits: a plain join kept Explorer, and with it the
+    /// space's thread, waiting until Explorer gave up on the caller.
     pub fn close(mut self) {
         self.stop();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        let Some(thread) = self.thread.take() else { return };
+        let handle = [HANDLE(thread.as_raw_handle())];
+        let deadline = Instant::now() + CLOSE_WAIT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now()).as_millis() as u32;
+            let wait = unsafe { MsgWaitForMultipleObjectsEx(Some(&handle), left, QS_SENDMESSAGE, MWMO_INPUTAVAILABLE) };
+            // The thread ended, or did not in time: Windows drops the app bar
+            // with its window when Wisp exits.
+            if wait.0 != WAIT_OBJECT_0.0 + 1 {
+                break;
+            }
+            // Looking at the queue answers the sent messages.
+            unsafe {
+                let mut msg = MSG::default();
+                let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+            }
         }
     }
 
