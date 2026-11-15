@@ -27,6 +27,9 @@ User-facing changes in each release. Each release on GitHub lists these notes an
 - A fullscreen app on another screen no longer hides the dock. (#93)
 - Switching to an app that has stopped responding no longer freezes the dock. (#93)
 - Quitting no longer stalls for seconds with Keep the dock visible on.
+- The dock stays while one of its menus is open, instead of sliding away under it.
+- The dock no longer gets stuck when the display scale changes while the launcher opens or closes.
+- Typing after closing a Wisp menu, such as opening Settings from the tray icon, no longer leaves the launcher half drawn and the dock gone. (fixes #58)
 - The dock redraws at once after changing its icon size or turning autohide off, instead of showing a cut-off or empty dock for a second or two. (#93)
 - The dock uses less CPU: it no longer wakes ten times a second to read the clock, volume and battery, no longer works while you drag other windows, and hides and restores the taskbar without holding up its own drawing. (#93)
 - The volume sliders in the launcher follow the mouse while you hold the button, even past their ends, instead of jumping only when you let go. Clicking the speaker beside the main volume mutes or unmutes. (#98, by @dogancemd)
