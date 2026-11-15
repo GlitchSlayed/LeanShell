@@ -63,8 +63,11 @@ struct Shared {
 
 impl Shared {
     fn get() -> Result<std::rc::Rc<Shared>> {
+        // Never dropped: the set lives as long as Wisp, and releasing it
+        // while the process exits crashed in Direct2D's teardown.
         thread_local! {
-            static SHARED: std::cell::OnceCell<std::rc::Rc<Shared>> = const { std::cell::OnceCell::new() };
+            static SHARED: std::mem::ManuallyDrop<std::cell::OnceCell<std::rc::Rc<Shared>>> =
+                const { std::mem::ManuallyDrop::new(std::cell::OnceCell::new()) };
         }
         SHARED.with(|cell| {
             if let Some(shared) = cell.get() {
