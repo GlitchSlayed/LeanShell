@@ -2871,6 +2871,9 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
             });
             return LRESULT(0);
         }
+        // The closed launcher's window is the dock's, and a menu can leave it
+        // in front. Keys typed then must not edit a launcher no one sees.
+        WM_KEYDOWN | WM_SYSKEYDOWN | WM_CHAR if with_launcher(|l| !l.visible) == Some(true) => {}
         WM_KEYDOWN | WM_SYSKEYDOWN => {
             // Holding Enter must not toggle a radio again after its worker finishes.
             if wparam.0 == VK_RETURN.0 as usize
