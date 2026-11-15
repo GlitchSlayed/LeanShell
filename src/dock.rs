@@ -105,10 +105,9 @@ const NEAR_POLL_MS: u32 = 15;
 const STILL_POLLS: u8 = 4;
 /// Polls the pointer may spend away from the dock before it hides.
 const HIDE_AFTER: u8 = 5;
-/// Steps the slide-in animation.
-const SLIDE_TIMER: usize = 103;
+/// The slide and the hover take this long. The owner's frames step them
+/// (`Dock::frame`), so no timer here does.
 const SLIDE_MS: f32 = 180.0;
-const HOVER_TIMER: usize = 105;
 const HOVER_MS: f32 = 110.0;
 /// Hides the desktop pill after a scroll.
 const DESKTOP_TIMER: usize = 106;
@@ -456,7 +455,6 @@ struct State {
     autohide: bool,
     search_button: bool,
     suspended: bool,
-    frame_paced: bool,
     held_dpi: Option<u32>,
     /// Where the window rests, in physical pixels, and when it began sliding there.
     top: i32,
@@ -729,7 +727,6 @@ impl Dock {
             autohide: true,
             search_button: true,
             suspended: false,
-            frame_paced: false,
             held_dpi: None,
             top: 0,
             slide: None,
@@ -983,12 +980,6 @@ impl Dock {
         unsafe { crate::morph::can_morph(IsWindowVisible(self.hwnd).as_bool(), s.slide_value()) }
     }
 
-    pub fn pace_frames(&mut self) {
-        self.update(Some("pace_frames"), move |s| {
-            s.frame_paced = true;
-        });
-    }
-
     /// Slides the dock in as the pointer would, and keeps it in, for captures.
     pub fn capture_reveal(&mut self) {
         self.update(Some("capture_reveal"), move |s| {
@@ -1013,13 +1004,19 @@ impl Dock {
 
     pub fn animating(&self) -> bool {
         // Keep frames requested while a menu may be holding an animation.
-        self.state.try_borrow().map(|s| s.slide.is_some()).unwrap_or(true)
+        self.state
+            .try_borrow()
+            .map(|s| s.slide.is_some() || s.hover_tick.is_some())
+            .unwrap_or(true)
     }
 
     pub fn frame(&mut self) {
         self.update(Some("frame"), move |s| {
             if s.slide.is_some() {
                 s.step_slide();
+            }
+            if s.hover_tick.is_some() {
+                s.step_hover();
             }
         });
     }
@@ -1300,9 +1297,7 @@ impl Drop for Dock {
             untrack_foreground();
             let _ = KillTimer(Some(self.hwnd), REFRESH_TIMER);
             let _ = KillTimer(Some(self.hwnd), POLL_TIMER);
-            let _ = KillTimer(Some(self.hwnd), SLIDE_TIMER);
             let _ = KillTimer(Some(self.hwnd), TIP_TIMER);
-            let _ = KillTimer(Some(self.hwnd), HOVER_TIMER);
             let _ = KillTimer(Some(self.hwnd), DESKTOP_TIMER);
             let _ = KillTimer(Some(self.hwnd), WINDOWS_TIMER);
             let _ = KillTimer(Some(self.hwnd), WINDOWS_HIDE_TIMER);
@@ -1915,15 +1910,15 @@ impl State {
         self.slide_from = self.slide_value();
         self.slide_to = to;
         self.slide = Some(Instant::now());
+        self.request_frame();
+    }
+
+    /// Asks the owner for an animation frame. It looks for animations between
+    /// messages of its own loop only, so one begun inside a menu's loop would
+    /// wait for the menu to close.
+    fn request_frame(&self) {
         unsafe {
-            if self.frame_paced {
-                // The owner looks for animations between messages of its own
-                // loop only: ask for a frame, so a slide begun inside a menu's
-                // loop moves too.
-                let _ = PostMessageW(Some(self.owner), WM_APP_FRAME, WPARAM(0), LPARAM(0));
-            } else {
-                SetTimer(Some(self.hwnd), SLIDE_TIMER, 10, None);
-            }
+            let _ = PostMessageW(Some(self.owner), WM_APP_FRAME, WPARAM(0), LPARAM(0));
         }
     }
 
@@ -1931,9 +1926,6 @@ impl State {
         self.slide = None;
         self.slide_from = 0.0;
         self.slide_to = 0.0;
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), SLIDE_TIMER);
-        }
     }
 
     fn slide_offset(&self, height: i32) -> i32 {
@@ -1971,7 +1963,6 @@ impl State {
             );
             if progress.is_some_and(|t| t >= 1.0) {
                 self.slide = None;
-                let _ = KillTimer(Some(self.hwnd), SLIDE_TIMER);
                 if !self.revealed {
                     let _ = ShowWindow(self.hwnd, SW_HIDE);
                 }
@@ -1990,9 +1981,7 @@ impl State {
     fn animate_hover(&mut self) {
         if self.hover_tick.is_none() {
             self.hover_tick = Some(Instant::now());
-        }
-        unsafe {
-            SetTimer(Some(self.hwnd), HOVER_TIMER, 10, None);
+            self.request_frame();
         }
     }
 
@@ -2010,10 +1999,9 @@ impl State {
         }
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
-            if !moving {
-                self.hover_tick = None;
-                let _ = KillTimer(Some(self.hwnd), HOVER_TIMER);
-            }
+        }
+        if !moving {
+            self.hover_tick = None;
         }
     }
 
@@ -3535,14 +3523,6 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                     s.wake();
                     // Windows frees the input data in DefWindowProc.
                     return DefWindowProcW(hwnd, msg, wp, lp);
-                }
-                WM_TIMER if wp.0 == SLIDE_TIMER => {
-                    s.step_slide();
-                    return LRESULT(0);
-                }
-                WM_TIMER if wp.0 == HOVER_TIMER => {
-                    s.step_hover();
-                    return LRESULT(0);
                 }
                 WM_TIMER if wp.0 == TIP_TIMER => {
                     s.show_tip();
