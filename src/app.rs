@@ -1034,8 +1034,9 @@ impl Launcher {
     fn on_dpi_changed(&mut self, dpi: u32) {
         if dpi != self.dpi {
             self.set_dpi(dpi);
+            // A morph can't go on at the old scale: end it where it was heading.
+            self.finish_morph();
             self.outline = None;
-            self.morph = None;
             self.apply_theme();
             if self.visible {
                 self.place_on_active_monitor();
@@ -1207,6 +1208,24 @@ impl Launcher {
         self.set_bounds(from);
     }
 
+    /// Ends the morph: the live material comes back, and after a closing one
+    /// the window is the dock's again, at its resting place.
+    fn finish_morph(&mut self) {
+        let Some(morph) = self.morph.take() else {
+            return;
+        };
+        self.apply_theme();
+        if !morph.opening {
+            self.outline = None;
+            if let Some(rect) = self.dock.as_ref().map(Dock::resting_rect) {
+                self.set_bounds(rect);
+            }
+            if let Some(dock) = &mut self.dock {
+                dock.resume();
+            }
+        }
+    }
+
     fn step_morph(&mut self) {
         let _span = util::perf::Span::new("morph");
         let Some(morph) = &self.morph else {
@@ -1227,15 +1246,7 @@ impl Launcher {
         self.set_bounds(rect);
         self.paint();
         if t >= 1.0 {
-            self.morph = None;
-            self.apply_theme();
-            if !opening {
-                self.outline = None;
-                self.set_bounds(self.dock.as_ref().unwrap().resting_rect());
-                if let Some(dock) = &mut self.dock {
-                    dock.resume();
-                }
-            }
+            self.finish_morph();
         }
         if crate::util::perf::hook_on("WISP_FRAME_TIMING") {
             eprintln!(
