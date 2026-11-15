@@ -1140,10 +1140,12 @@ impl Dock {
             s.search_button = search;
             s.autohide = autohide;
             s.away = 0;
-            if !autohide && s.visible && !s.suspended {
-                s.revealed = true;
+            if !autohide && s.visible && !s.suspended && !s.revealed {
+                // Setting `revealed` alone would leave the slide hidden.
+                s.reveal();
+            } else {
+                s.refresh();
             }
-            s.refresh();
         });
     }
 
