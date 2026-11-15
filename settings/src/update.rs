@@ -247,7 +247,7 @@ pub fn restart_settings() -> Result<(), String> {
         .args(["--page", "about"])
         .spawn()
         .map(|_| ())
-        .map_err(|error| format!("Cannot restart settings: {error}"))
+        .map_err(|error| format!("Cannot restart Settings: {error}"))
 }
 
 /// Deletes the `.old` files a previous update left behind, on a background

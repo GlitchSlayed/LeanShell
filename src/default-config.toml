@@ -8,7 +8,7 @@ hotkey = "Alt+Space"
 # while on.
 win_key = false
 
-# Results visible at once. Scroll to see more.
+# Results visible at once.
 max_results = 8
 
 # "system", "dark" or "light"
@@ -17,9 +17,7 @@ theme = "system"
 # Launcher backdrop: "acrylic", "mica" or "solid"
 backdrop = "acrylic"
 
-# Where the launcher opens: "bottom" for a search box at the bottom of the
-# screen with results above it, where the dock grows into the launcher; or
-# "center".
+# Where the launcher opens: "bottom" or "center"
 position = "bottom"
 
 # Show recently launched apps when the search box is empty.
@@ -28,7 +26,7 @@ show_recent = true
 # Web search URL. Wisp replaces {query} with the encoded search text.
 search_url = "https://www.google.com/search?q={query}"
 
-# Search file names. Start a query with ? to search files only.
+# Search file names.
 file_search = true
 
 # Search with Everything (voidtools) when it's running: every drive, and words
@@ -46,8 +44,7 @@ check_for_updates = true
 # quits.
 hide_taskbar = true
 
-# Show the dock: running apps, notification icons, volume, battery and the
-# clock. It appears when the pointer touches the bottom edge of a screen.
+# Show the dock: running apps, notification icons, status and the clock.
 dock = true
 
 # Hide the dock until the pointer touches the bottom edge of a screen. With
@@ -55,15 +52,14 @@ dock = true
 # taskbar is hidden.
 dock_autohide = true
 
-# The search button at the start of the dock. With false it disappears and the
-# launcher opens with the hotkey only.
+# Show the search button at the start of the dock.
 dock_search_button = true
 
 # App window list shown when hovering a running app icon:
 # "multiple" (only when the app has multiple windows), "always", or "off".
 window_list = "multiple"
 
-# App icons in the dock, in DIPs (24 to 40). The default is 32.
+# App icons in the dock, in DIPs (24 to 40).
 dock_icon_size = 32
 
 # Sections from left to right. Drag a section in the dock to change this order.
@@ -75,7 +71,5 @@ dock_status_icons = []
 
 # The color of the dock and the launcher, as "#RRGGBB", or "#RRGGBBAA" where
 # AA (00 to FF) sets how strongly the color covers the theme's acrylic. Mica
-# and solid show it at full strength. Text turns light or dark to stay
-# readable, and follows the theme below 40% strength. Empty uses the theme's
-# colors.
+# and solid show it at full strength. Empty uses the theme's colors.
 dock_color = ""

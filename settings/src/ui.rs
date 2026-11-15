@@ -476,7 +476,7 @@ impl Settings {
             .child(divider(p))
             .child(row(
                 "Custom dock color",
-                "Colors the dock and the launcher. Off uses the theme's colors.",
+                "Colors the dock and the launcher.",
                 Switch::new("custom-dock-color")
                     .checked(custom)
                     .accessibility_label("Custom dock color")
@@ -491,9 +491,8 @@ impl Settings {
                 rows.child(divider(p)).child(
                     item(
                         "Dock color",
-                        "For the dock and the launcher. Text turns light or dark to stay readable, and follows the \
-                         theme below 40% strength. With Acrylic, the color's alpha sets how much of the theme's acrylic shows through. \
-                         Mica and Solid show the color at full strength.",
+                        "With Acrylic, the color's alpha sets how much of the theme's acrylic shows through. Mica and \
+                         Solid show the color at full strength.",
                         p,
                     )
                     .child(
@@ -763,11 +762,8 @@ impl Settings {
         };
         let busy = |label: &'static str| Button::new("busy").label(label).disabled(true).into_any_element();
         let (description, control): (SharedString, AnyElement) = match &self.updates {
-            Updates::Idle => (
-                format!("You have version {current}.").into(),
-                check("Check for updates", cx),
-            ),
-            Updates::Checking => ("Checking GitHub for a newer version…".into(), busy("Checking…")),
+            Updates::Idle => ("".into(), check("Check for updates", cx)),
+            Updates::Checking => ("".into(), busy("Checking…")),
             Updates::Latest => (
                 format!("Version {current} is the latest version.").into(),
                 check("Check again", cx),
@@ -775,7 +771,7 @@ impl Settings {
             Updates::Available(release) => {
                 let page = release.page.clone();
                 (
-                    format!("Wisp {} is available. You have {current}.", release.version()).into(),
+                    format!("Wisp {} is available.", release.version()).into(),
                     h_flex()
                         .gap_2()
                         .child(
@@ -793,15 +789,12 @@ impl Settings {
                         .into_any_element(),
                 )
             }
-            Updates::Installing => (
-                "Downloading and installing. Wisp restarts when it is done.".into(),
-                busy("Updating…"),
-            ),
+            Updates::Installing => ("Wisp restarts when it is done.".into(), busy("Updating…")),
             Updates::Installed(version) => (
-                format!("Wisp {version} is installed. Restart Settings to use the new version.").into(),
+                format!("Wisp {version} is installed.").into(),
                 Button::new("restart-settings")
                     .primary()
-                    .label("Restart")
+                    .label("Restart Settings")
                     .on_click(cx.listener(|this, _, _, cx| match update::restart_settings() {
                         Ok(()) => cx.quit(),
                         Err(error) => {
@@ -811,7 +804,7 @@ impl Settings {
                     }))
                     .into_any_element(),
             ),
-            Updates::Failed(_) => (format!("You have version {current}.").into(), check("Try again", cx)),
+            Updates::Failed(_) => ("".into(), check("Try again", cx)),
         };
         let error = match &self.updates {
             Updates::Failed(error) => Some(div().px_4().pb_3().child(error_text(error, p))),
@@ -887,10 +880,7 @@ impl Settings {
     fn shortcut_control(&self, p: Palette, cx: &mut Context<Self>) -> Div {
         if self.config.win_key {
             // The Win key replaces the shortcut; the saved one returns when it's off.
-            return v_flex().child(hint(
-                "Using the Win key. Turn off Use Win key to choose your own shortcut.",
-                p,
-            ));
+            return v_flex().child(hint("Turn off Use Win key to choose a shortcut.", p));
         }
         v_flex()
             .gap_2()
@@ -909,10 +899,6 @@ impl Settings {
                             .on_click(cx.listener(|this, _, window, cx| this.start_recording(window, cx))),
                     ),
             )
-            .child(hint(
-                "Type a shortcut and press Enter, or select Record and press it. Esc cancels.",
-                p,
-            ))
             .children(self.shortcut_error.as_ref().map(|e| error_text(e, p)))
     }
 
@@ -930,7 +916,7 @@ impl Settings {
     fn status_controls(&self, p: Palette, cx: &mut Context<Self>) -> Div {
         let mut block = group(p).child(row(
             "Group status icons",
-            "Keep visible status icons together. Hidden icons stay hidden.",
+            "",
             Switch::new("group-status")
                 .checked(!self.config.dock_status_group.is_empty())
                 .disabled(self.config.dock_status_group.is_empty() && self.config.dock_status_icons.is_empty())
@@ -1029,24 +1015,25 @@ impl Settings {
             .gap_2()
             .child(label("Launcher", p))
             .child(
-                group(p).child(
-                    item("Shortcut", "Shows or hides the launcher.", p)
-                        .child(self.shortcut_control(p, cx))
-                        .children(self.conflict_warning(p)),
-                )
-                .child(divider(p))
-                .child(self.win_key_row(p, cx)),
+                group(p)
+                    .child(
+                        item("Shortcut", "", p)
+                            .child(self.shortcut_control(p, cx))
+                            .children(self.conflict_warning(p)),
+                    )
+                    .child(divider(p))
+                    .child(self.win_key_row(p, cx)),
             )
             .child(div().h_3())
             .child(label("Dock", p))
             .child(
                 group(p)
                     .child(row(
-                        "Dock",
-                        "Show running apps, notification icons, status and the clock at the bottom of the screen.",
+                        "Show the dock",
+                        "",
                         Switch::new("dock")
                             .checked(self.config.dock)
-                            .accessibility_label("Dock")
+                            .accessibility_label("Show the dock")
                             .on_change(cx.listener(|this, enabled: &bool, window, cx| {
                                 this.save("dock", (*enabled).into(), window, cx);
                             })),
@@ -1055,7 +1042,7 @@ impl Settings {
                     .child(divider(p))
                     .child(row(
                         "Keep the dock visible",
-                        "Show the dock all the time on the main screen instead of when the pointer touches the bottom edge. While the taskbar is hidden, windows stop above the dock.",
+                        "Stays on the main screen. While the taskbar is hidden, windows stop above the dock.",
                         Switch::new("dock-visible")
                             .checked(!self.config.dock_autohide)
                             .disabled(!self.config.dock)
@@ -1068,11 +1055,7 @@ impl Settings {
                     .child(divider(p))
                     .child(row(
                         "Search button",
-                        if self.config.win_key {
-                            "Show a button at the start of the dock that opens the launcher. The Win key opens it either way."
-                        } else {
-                            "Show a button at the start of the dock that opens the launcher. Your shortcut opens it either way."
-                        },
+                        "",
                         Switch::new("dock-search-button")
                             .checked(self.config.dock_search_button)
                             .disabled(!self.config.dock)
@@ -1084,22 +1067,15 @@ impl Settings {
                     ))
                     .child(divider(p))
                     .child(
-                        item(
-                            "App icon size",
-                            format!(
-                                "{} DIP. The dock's height, spacing and status area scale with it.",
-                                self.config.dock_icon_size
-                            ),
-                            p,
-                        )
-                        .child(Slider::new(&self.app_icon_size).accessibility_label("App icon size")),
+                        item("App icon size", format!("{} DIP", self.config.dock_icon_size), p)
+                            .child(Slider::new(&self.app_icon_size).accessibility_label("App icon size")),
                     )
                     .child(divider(p))
                     .child(row(
                         "Pinned apps",
-                        format!("{} apps pinned", self.pinned_count),
+                        format!("{} pinned", self.pinned_count),
                         Button::new("unpin-all")
-                            .label("Unpin all apps")
+                            .label("Unpin all")
                             .disabled(self.pinned_count == 0)
                             .on_click(cx.listener(|this, _, _, cx| this.unpin_all(cx))),
                         p,
@@ -1107,7 +1083,7 @@ impl Settings {
                     .child(divider(p))
                     .child(row(
                         "App window list",
-                        "Show a compact window list when hovering a running app icon.",
+                        "Lists an app's windows when you hover its icon.",
                         Select::new(&self.window_list)
                             .accessibility_label("App window list")
                             .w(px(190.)),
@@ -1116,7 +1092,7 @@ impl Settings {
                     .child(divider(p))
                     .child(row(
                         "Hide the taskbar",
-                        "Hide the Windows taskbar while Wisp runs. The taskbar comes back when Wisp quits.",
+                        "The taskbar comes back when Wisp quits.",
                         Switch::new("hide-taskbar")
                             .checked(self.config.hide_taskbar)
                             .accessibility_label("Hide the taskbar")
@@ -1128,7 +1104,7 @@ impl Settings {
                     .child(divider(p))
                     .child(row(
                         "Launcher at the bottom",
-                        "Open the launcher at the bottom of the screen. With the dock, the dock grows into the launcher.",
+                        "",
                         Switch::new("position-bottom")
                             .checked(self.config.position == "bottom")
                             .accessibility_label("Launcher at the bottom")
@@ -1144,25 +1120,26 @@ impl Settings {
             .child(self.status_controls(p, cx))
             .child(div().h_3())
             .child(label("Updates", p))
-            .child(group(p).child(row(
-                "Check for updates",
-                "Check daily, except on metered connections. Nightly builds skip checks.",
-                Switch::new("check-for-updates")
-                    .checked(self.config.check_for_updates)
-                    .accessibility_label("Check for updates")
-                    .on_change(cx.listener(|this, enabled: &bool, window, cx| {
-                        this.save("check_for_updates", (*enabled).into(), window, cx);
-                    })),
-                p,
-            )))
+            .child(
+                group(p).child(row(
+                    "Check for updates",
+                    if crate::channel::NIGHTLY {
+                        "Nightly builds skip checks."
+                    } else {
+                        "Daily, except on metered connections."
+                    },
+                    Switch::new("check-for-updates")
+                        .checked(self.config.check_for_updates)
+                        .accessibility_label("Check for updates")
+                        .on_change(cx.listener(|this, enabled: &bool, window, cx| {
+                            this.save("check_for_updates", (*enabled).into(), window, cx);
+                        })),
+                    p,
+                )),
+            )
             .child(div().h_3())
             .child(label("Startup", p))
-            .child(group(p).child(row(
-                "Start with Windows",
-                "Open Wisp when you sign in.",
-                self.autostart_switch(cx),
-                p,
-            )))
+            .child(group(p).child(row("Start with Windows", "", self.autostart_switch(cx), p)))
             .into_any_element()
     }
 
@@ -1175,7 +1152,7 @@ impl Settings {
                 group(p)
                     .child(row(
                         "Theme",
-                        "Light, dark, or the same as Windows.",
+                        "",
                         Select::new(&self.theme).accessibility_label("Theme").w(px(160.)),
                         p,
                     ))
@@ -1217,15 +1194,8 @@ impl Settings {
             .child(label("Results", p))
             .child(
                 group(p).child(
-                    item(
-                        "Visible results",
-                        format!(
-                            "{} results visible at once. Scroll to see more.",
-                            self.config.max_results
-                        ),
-                        p,
-                    )
-                    .child(Slider::new(&self.results).accessibility_label("Results visible at once")),
+                    item("Visible results", self.config.max_results.to_string(), p)
+                        .child(Slider::new(&self.results).accessibility_label("Results visible at once")),
                 ),
             )
             .into_any_element()
@@ -1263,7 +1233,7 @@ impl Settings {
                 group(p)
                     .child(row(
                         "Recent apps",
-                        "Show recently opened apps when the search box is empty.",
+                        "Shown when the search box is empty.",
                         Switch::new("recent")
                             .checked(self.config.show_recent)
                             .accessibility_label("Show recent apps")
@@ -1285,7 +1255,7 @@ impl Settings {
                 group(p)
                     .child(row(
                         "File search",
-                        "Search file names. Start a query with ? to search files only.",
+                        "Searches file names.",
                         Switch::new("file-search")
                             .checked(self.config.file_search)
                             .accessibility_label("File search")
@@ -1297,7 +1267,7 @@ impl Settings {
                     .child(divider(p))
                     .child(row(
                         "Use Everything",
-                        "When Everything is running, search every drive with it. Otherwise Wisp uses the Windows Search index.",
+                        "When Everything is running, search every drive with it.",
                         Switch::new("file-search-everything")
                             .checked(self.config.file_search_everything)
                             .accessibility_label("Use Everything")
@@ -1308,23 +1278,19 @@ impl Settings {
                     ))
                     .child(divider(p))
                     .child(
-                        item(
-                            "Skipped folders",
-                            "File search skips folders with these names, and every name that starts with a dot.",
-                            p,
-                        )
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .child(Input::new(&self.folder).aria_label("Folder name to skip").flex_1())
-                                .child(
-                                    Button::new("add-folder")
-                                        .label("Add")
-                                        .on_click(cx.listener(|this, _, window, cx| this.add_folder(window, cx))),
-                                ),
-                        )
-                        .children(self.folder_error.as_ref().map(|e| error_text(e, p)))
-                        .child(folders),
+                        item("Skipped folders", "Names that start with a dot are always skipped.", p)
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(Input::new(&self.folder).aria_label("Folder name to skip").flex_1())
+                                    .child(
+                                        Button::new("add-folder")
+                                            .label("Add")
+                                            .on_click(cx.listener(|this, _, window, cx| this.add_folder(window, cx))),
+                                    ),
+                            )
+                            .children(self.folder_error.as_ref().map(|e| error_text(e, p)))
+                            .child(folders),
                     ),
             )
             .into_any_element()
@@ -1450,7 +1416,7 @@ impl Settings {
 
     fn onboarding_view(&self, step: usize, p: Palette, cx: &mut Context<Self>) -> AnyElement {
         let shortcut = group(p)
-            .child(item("Shortcut", "Shows or hides the launcher.", p).child(self.shortcut_control(p, cx)))
+            .child(item("Shortcut", "", p).child(self.shortcut_control(p, cx)))
             .child(divider(p))
             .child(self.win_key_row(p, cx));
         let (title, body): (&str, Div) = match step {
@@ -1467,13 +1433,7 @@ impl Settings {
                 "Check the shortcut",
                 v_flex()
                     .gap_4()
-                    .child(match self.conflict_warning(p) {
-                        Some(warning) => warning,
-                        None => hint(
-                            "PowerToys Run does not use this shortcut. If another app takes it, Wisp shows a notification.",
-                            p,
-                        ),
-                    })
+                    .children(self.conflict_warning(p))
                     .child(shortcut),
             ),
             _ => (
@@ -1482,7 +1442,7 @@ impl Settings {
                     .gap_4()
                     .child(group(p).child(row(
                         "Start with Windows",
-                        "Open Wisp when you sign in.",
+                        "",
                         self.autostart_switch(cx),
                         p,
                     )))
@@ -1634,7 +1594,13 @@ fn item(title: &'static str, description: impl Into<SharedString>, p: Palette) -
         .gap_2()
         .px_4()
         .py_3()
-        .child(v_flex().child(div().child(title)).child(hint(description, p)))
+        .child(v_flex().child(div().child(title)).children(described(description, p)))
+}
+
+/// The line under a setting's title, when it has one.
+fn described(description: impl Into<SharedString>, p: Palette) -> Option<Div> {
+    let description = description.into();
+    (!description.is_empty()).then(|| hint(description, p))
 }
 
 /// A setting whose control sits at the right. The control keeps its own width.
@@ -1648,7 +1614,7 @@ fn row(title: &'static str, description: impl Into<SharedString>, control: impl 
                 .flex_1()
                 .min_w_0()
                 .child(div().child(title))
-                .child(hint(description, p)),
+                .children(described(description, p)),
         )
         .child(div().flex_none().child(control))
 }
