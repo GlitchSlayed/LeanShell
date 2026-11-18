@@ -18,3 +18,12 @@ pub fn modified() -> Option<SystemTime> {
 pub fn load() -> (Config, Option<String>) {
     Config::load_from_path(&path())
 }
+
+pub fn read() -> Result<(Config, Option<String>), String> {
+    Config::read_from_path(&path())
+}
+
+/// The dock's color, or `None` for the theme's colors.
+pub fn dock_tint(config: &Config) -> Option<crate::theme::Tint> {
+    crate::theme::Tint::parse(&config.dock_color)
+}

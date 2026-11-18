@@ -6,9 +6,14 @@ mod calc;
 mod channel;
 mod commands;
 mod config;
+#[allow(dead_code)]
+mod config_write;
+#[allow(dead_code)]
+mod deferred;
 mod desktop;
 mod dock;
 mod drag;
+mod ease;
 mod editor;
 mod files;
 mod history;
@@ -18,9 +23,11 @@ mod indexer;
 #[allow(dead_code)]
 mod install;
 mod launch;
+mod messages;
 mod morph;
 mod panic_log;
 mod render;
+mod screens;
 mod search;
 mod startup;
 mod surface;

@@ -25,7 +25,7 @@ pub const DEFAULT_RESERVED_HEIGHT: f32 = logic::HEIGHT + 2.0 * logic::MARGIN;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::*;
@@ -37,7 +37,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetDoubleClickTime, GetKeyState, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_ESCAPE,
     VK_LBUTTON, VK_RBUTTON, VK_SHIFT,
@@ -50,19 +50,12 @@ use windows::core::{Error, GUID, PCWSTR, Result, w};
 use crate::commands::open_windows::{self, Window};
 use crate::config::{Backdrop, DisplayMode, PanelAlign, PanelEdge, WindowListMode};
 use crate::indexer::{AppEntry, IconPixels};
-use crate::theme::Palette;
+use crate::messages::{
+    WM_ARTWORK, WM_CLOSE_FLYOUT, WM_DOCK_STATUS, WM_FOREGROUND_CHANGED, WM_REFRESH, WM_TRAY_CHANGED,
+};
+pub use crate::messages::{WM_DOCK_SHOW_TASKBAR, WM_SHOW_LAUNCHER};
+use crate::theme::{Palette, Tint};
 use crate::tray_host::{self, Action, TrayHost};
-
-pub const WM_SHOW_LAUNCHER: u32 = WM_APP + 20;
-const WM_REFRESH: u32 = WM_APP + 21;
-/// The tray host's icons changed.
-const WM_TRAY_CHANGED: u32 = WM_APP + 22;
-/// Asks the owner to show the Windows taskbar for a moment, for icons the
-/// dock lacks.
-pub const WM_DOCK_SHOW_TASKBAR: u32 = WM_APP + 23;
-const WM_CLOSE_FLYOUT: u32 = WM_APP + 24;
-const WM_FOREGROUND_CHANGED: u32 = WM_APP + 25;
-const WM_ARTWORK: u32 = WM_APP + 26;
 /// Shows a notification icon's tooltip after a short hover.
 const TIP_TIMER: usize = 104;
 const TIP_MS: u32 = 450;
@@ -95,10 +88,62 @@ const HOVER_TIMER: usize = 105;
 const HOVER_MS: f32 = 110.0;
 /// Hides the desktop pill after a scroll.
 const DESKTOP_TIMER: usize = 106;
+/// Fires as each minute starts, for the clock.
+const CLOCK_TIMER: usize = 109;
+/// A dock that stays visible and isn't in use checks for fullscreen apps at
+/// this rate; its clock, volume and battery update from events.
+const QUIET_POLL_MS: u32 = 500;
 const DESKTOP_PILL_MS: u32 = 1100;
 /// Wheel input right after a switch is the same flick, not another request.
 const DESKTOP_PAUSE: Duration = Duration::from_millis(300);
 thread_local! { static EVENT_TARGET: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) }; }
+
+/// Fires [`CLOCK_TIMER`] just after the next minute starts.
+fn arm_clock(hwnd: HWND) {
+    // SAFETY: GetLocalTime reads system local time and SetTimer arms a timer on `hwnd`.
+    unsafe {
+        let now = windows::Win32::System::SystemInformation::GetLocalTime();
+        let into_minute = u32::from(now.wSecond) * 1000 + u32::from(now.wMilliseconds);
+        SetTimer(Some(hwnd), CLOCK_TIMER, 60_000 - into_minute.min(59_999) + 20, None);
+    }
+}
+
+/// Where the dock shows: `dock_screen` in the config.
+#[derive(Clone, Debug, PartialEq)]
+enum ScreenChoice {
+    /// The screen whose bottom edge the pointer touches. A dock that stays
+    /// visible uses the main screen.
+    Pointer,
+    Main,
+    /// A screen by its [`crate::screens::Screen::id`]. The main screen stands
+    /// in while it isn't connected.
+    Named(String),
+}
+
+impl ScreenChoice {
+    fn parse(value: &str) -> Self {
+        match value.trim() {
+            "" | crate::screens::POINTER => Self::Pointer,
+            crate::screens::MAIN => Self::Main,
+            id => Self::Named(id.to_owned()),
+        }
+    }
+}
+
+/// The screen the dock stays on, and whether the user chose it, for the
+/// launcher and for the threads that keep its space.
+static SCREEN: Mutex<(Option<RECT>, bool)> = Mutex::new((None, false));
+
+/// The bounds of the screen the dock stays on, or `None` while it follows
+/// the pointer.
+pub fn fixed_screen() -> Option<RECT> {
+    SCREEN.lock().map_or(None, |screen| screen.0)
+}
+
+/// The screen the user chose for the dock, if they chose one.
+pub fn chosen_screen() -> Option<RECT> {
+    SCREEN.lock().map_or(None, |screen| screen.0.filter(|_| screen.1))
+}
 
 struct Item {
     app: AppEntry,
@@ -118,6 +163,9 @@ struct State {
     pinned: Vec<AppEntry>,
     palette: Palette,
     backdrop: Backdrop,
+    dark: bool,
+    /// The user's dock color, kept so system theme changes reapply it.
+    tint: Option<Tint>,
     window_list_mode: WindowListMode,
     app_icon_size: f32,
     renderer: render::Renderer,
@@ -140,6 +188,18 @@ struct State {
     /// there.
     last_cursor: POINT,
     still_polls: u8,
+    /// Separate from idle polling: valid only since the last eligible poll.
+    edge_previous: Option<(POINT, Instant)>,
+    /// Where the pointer revealed the dock: it stays on that screen while it
+    /// shows, even if the pointer carries on to the screen below.
+    reveal_at: Option<POINT>,
+    /// Where the dock shows, from `dock_screen`.
+    screen: ScreenChoice,
+    /// The bounds of the screen the dock stays on, or `None` while it follows
+    /// the pointer.
+    fixed: Option<RECT>,
+    /// Consumed crossing, retained while the pointer rests at this shared edge.
+    edge_held: Option<(RECT, std::ops::Range<i32>)>,
     /// Windows reports the next pointer movement, while the pointer rests in
     /// the lower part of a screen and the dock is hidden.
     listening: bool,
@@ -149,6 +209,7 @@ struct State {
     /// Whether the dock hides until the pointer touches a bottom edge. When
     /// false it stays on the primary screen.
     autohide: bool,
+    show_search: bool,
     suspended: bool,
     frame_paced: bool,
     held_dpi: Option<u32>,
@@ -176,7 +237,9 @@ struct State {
     tray: Vec<tray::Shown>,
     /// Indices into `tray` of the icons shown in the dock itself.
     inline: Vec<usize>,
-    /// Lists every notification icon above the chevron.
+    /// Indices into `tray` of the icons left for the flyout, in cell order.
+    hidden: Vec<usize>,
+    /// Lists the notification icons missing from the dock above the chevron.
     flyout: HWND,
     flyout_open: bool,
     flyout_hover: Option<usize>,
@@ -218,6 +281,11 @@ impl Dock {
     }
 
     fn create(owner: HWND, shared: bool) -> Result<Self> {
+        // A new state starts following the pointer, so a previous dock's
+        // screen must not outlive it.
+        if let Ok(mut screen) = SCREEN.lock() {
+            *screen = (None, false);
+        }
         if EVENT_TARGET.with(|target| !target.get().is_invalid()) {
             return Err(Error::new(E_FAIL, "A dock already exists on this thread"));
         }
@@ -234,6 +302,8 @@ impl Dock {
             pinned: load_pins(),
             palette: Palette::new(true, true),
             backdrop: Backdrop::Acrylic,
+            dark: true,
+            tint: None,
             window_list_mode: WindowListMode::default(),
             app_icon_size: logic::DEFAULT_APP_ICON_SIZE,
             renderer: render::Renderer::new()?,
@@ -252,9 +322,15 @@ impl Dock {
             poll_ms: POLL_MS,
             last_cursor: POINT::default(),
             still_polls: 0,
+            edge_previous: None,
+            reveal_at: None,
+            screen: ScreenChoice::Pointer,
+            fixed: None,
+            edge_held: None,
             listening: false,
             held: false,
             autohide: true,
+            show_search: true,
             suspended: false,
             frame_paced: false,
             held_dpi: None,
@@ -275,6 +351,7 @@ impl Dock {
             tray_host: None,
             tray: Vec::new(),
             inline: Vec::new(),
+            hidden: Vec::new(),
             flyout: HWND::default(),
             flyout_open: false,
             flyout_hover: None,
@@ -385,6 +462,8 @@ impl Dock {
             }
         }
         EVENT_TARGET.with(|target| target.set(hwnd));
+        crate::commands::audio::notify_level_changes(hwnd, WM_DOCK_STATUS);
+        arm_clock(hwnd);
         for (first, last) in [
             (EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE),
             (EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE),
@@ -409,7 +488,7 @@ impl Dock {
             }
             dock.hooks.push(hook);
         }
-        dock.apply_theme(Palette::new(true, true), Backdrop::Acrylic);
+        dock.apply_theme(true, Backdrop::Acrylic, None);
         dock.refresh();
         Ok(dock)
     }
@@ -427,10 +506,10 @@ impl Dock {
     }
 
     pub fn owns_message(msg: u32, wp: WPARAM) -> bool {
-        msg == WM_TIMER && (REFRESH_TIMER..=WINDOWS_HIDE_TIMER).contains(&wp.0)
+        msg == WM_TIMER && (REFRESH_TIMER..=CLOCK_TIMER).contains(&wp.0)
             || matches!(
                 msg,
-                WM_REFRESH | WM_FOREGROUND_CHANGED | WM_TRAY_CHANGED | WM_INPUT | WM_ARTWORK
+                WM_REFRESH | WM_FOREGROUND_CHANGED | WM_TRAY_CHANGED | WM_INPUT | WM_ARTWORK | WM_DOCK_STATUS
             )
     }
 
@@ -522,6 +601,9 @@ impl Dock {
         }
         s.listen(false);
         s.stop_slide();
+        s.edge_previous = None;
+        s.edge_held = None;
+        s.reveal_at = None;
         s.suspended = true;
         rect
     }
@@ -593,8 +675,46 @@ impl Dock {
         self.state.borrow_mut().refresh();
     }
 
-    pub fn apply_theme(&mut self, palette: Palette, backdrop: Backdrop) {
-        self.state.borrow_mut().apply_material(palette.text.r > 0.5, backdrop);
+    pub fn apply_theme(&mut self, dark: bool, backdrop: Backdrop, tint: Option<Tint>) {
+        self.state.borrow_mut().apply_material(dark, backdrop, tint);
+    }
+
+    /// Shows or hides the search button, the first slot of the dock.
+    pub fn set_show_search(&mut self, shown: bool) {
+        let mut s = self.state.borrow_mut();
+        if s.show_search == shown {
+            return;
+        }
+        s.show_search = shown;
+        s.hide_tip();
+        s.hide_windows();
+        s.hover = None;
+        s.hover_part = None;
+        s.place();
+        // SAFETY: `s.hwnd` is a live window handle owned by `Dock`.
+        unsafe {
+            let _ = InvalidateRect(Some(s.hwnd), None, false);
+        }
+    }
+
+    /// Chooses which screen the dock shows on (`"pointer"`, `"main"`, or display device path).
+    pub fn set_screen(&mut self, value: &str) {
+        let screen = ScreenChoice::parse(value);
+        let mut s = self.state.borrow_mut();
+        if s.screen == screen {
+            return;
+        }
+        s.screen = screen;
+        s.resolve_screen();
+        s.away = 0;
+        s.edge_previous = None;
+        s.edge_held = None;
+        s.reveal_at = None;
+        s.place();
+        // SAFETY: `s.hwnd` is a live window handle owned by `Dock`.
+        unsafe {
+            let _ = InvalidateRect(Some(s.hwnd), None, false);
+        }
     }
 
     /// Hosts the notification area in the dock while `enabled`, which
@@ -672,17 +792,18 @@ impl Dock {
         }
         s.sync_tray();
     }
-    /// Keeps the dock visible on the primary screen, or lets it auto-hide.
+    /// Keeps the dock visible on the chosen/main screen, or lets it auto-hide.
     pub fn set_autohide(&mut self, autohide: bool) {
         let mut s = self.state.borrow_mut();
         if s.autohide == autohide {
             return;
         }
         s.autohide = autohide;
+        s.resolve_screen();
         if !autohide && s.visible && !s.suspended && !s.revealed {
             s.reveal();
         } else {
-            // Move to the primary screen, or start the hide countdown.
+            // Move to the chosen screen, or start the hide countdown.
             s.away = 0;
             s.place();
         }
@@ -710,6 +831,9 @@ impl Dock {
         s.visible = false;
         s.stop_slide();
         s.revealed = false;
+        s.edge_previous = None;
+        s.edge_held = None;
+        s.reveal_at = None;
         s.listen(false);
         unsafe {
             let _ = KillTimer(Some(self.hwnd), POLL_TIMER);
@@ -736,6 +860,7 @@ impl Drop for Dock {
             let _ = KillTimer(Some(self.hwnd), DESKTOP_TIMER);
             let _ = KillTimer(Some(self.hwnd), WINDOWS_TIMER);
             let _ = KillTimer(Some(self.hwnd), WINDOWS_HIDE_TIMER);
+            let _ = KillTimer(Some(self.hwnd), CLOCK_TIMER);
             // Remove the pointer before synchronous destruction can reenter the wndproc.
             let s = self.state.borrow();
             for hwnd in [s.flyout, s.tip, s.windows, self.hwnd] {
@@ -804,14 +929,32 @@ impl State {
         }
     }
 
-    fn apply_material(&mut self, dark: bool, backdrop: Backdrop) {
+    fn apply_material(&mut self, dark: bool, backdrop: Backdrop, tint: Option<Tint>) {
+        self.dark = dark;
         self.backdrop = backdrop;
-        self.palette = crate::theme::apply_backdrop(self.hwnd, dark, backdrop, true);
+        self.tint = tint;
+        self.palette = crate::theme::apply_tinted_backdrop(self.hwnd, dark, backdrop, true, tint);
+        // Popups over the dock (flyouts, tooltips, window lists) wear the same color.
         for hwnd in [self.flyout, self.tip, self.windows] {
-            crate::theme::apply_backdrop(hwnd, dark, backdrop, true);
+            crate::theme::apply_tinted_backdrop(hwnd, dark, backdrop, true, tint);
             unsafe {
                 let _ = InvalidateRect(Some(hwnd), None, false);
             }
+        }
+    }
+
+    /// Works out the screen the dock stays on, after a setting or display
+    /// change, and shares it with the launcher and dock space thread.
+    fn resolve_screen(&mut self) {
+        self.fixed = match &self.screen {
+            ScreenChoice::Pointer if self.autohide => None,
+            ScreenChoice::Named(id) => crate::screens::find(id)
+                .map(|screen| screen.bounds)
+                .or_else(crate::screens::main),
+            _ => crate::screens::main(),
+        };
+        if let Ok(mut screen) = SCREEN.lock() {
+            *screen = (self.fixed, self.screen != ScreenChoice::Pointer);
         }
     }
 
@@ -840,6 +983,7 @@ impl State {
                     let id = aumid.filter(|s| !s.is_empty()).unwrap_or_else(|| window.exe.clone());
                     AppEntry {
                         name: open_windows::program_name(&window.exe).into(),
+                        aliases: Vec::new(),
                         id,
                         path: (!window.exe.is_empty()).then(|| window.exe.clone()),
                     }
@@ -893,6 +1037,9 @@ impl State {
             self.hide_windows();
             self.stop_slide();
             self.revealed = false;
+            self.edge_previous = None;
+            self.edge_held = None;
+            self.reveal_at = None;
         }
         unsafe {
             let _ = ShowWindow(
@@ -921,6 +1068,7 @@ impl State {
                 app: AppEntry {
                     id: pin.id.clone(),
                     name: pin.name.clone(),
+                    aliases: Vec::new(),
                     path: pin.path.clone(),
                 },
                 windows: Vec::new(),
@@ -962,6 +1110,7 @@ impl State {
         logic::AppLayout {
             count: self.count(),
             pinned: self.pinned.len().saturating_sub(self.scroll).min(self.count()),
+            show_search: self.show_search,
             panel_width,
             center_apps: self.display_mode == DisplayMode::Panel && self.panel_align == PanelAlign::Center,
             vertical: is_vert,
@@ -978,12 +1127,17 @@ impl State {
         let _span = crate::util::perf::Span::new("dock_poll");
         let mut cursor = POINT::default();
         if unsafe { GetCursorPos(&mut cursor) }.is_err() {
+            self.edge_previous = None;
             return;
         }
+        self.hold_bottom_crossing(&mut cursor);
         let hidden = !self.revealed && self.slide.is_none();
         if !hidden && fullscreen_foreground(self.hwnd) {
             self.stop_slide();
             self.revealed = false;
+            self.edge_previous = None;
+            self.edge_held = None;
+            self.reveal_at = None;
             self.close_flyout();
             self.hide_tip();
             self.hide_windows();
@@ -1005,13 +1159,15 @@ impl State {
                 unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 || GetAsyncKeyState(VK_RBUTTON.0 as i32) < 0 };
             let moved = cursor != self.last_cursor;
             self.last_cursor = cursor;
-            let monitor = cursor_monitor(cursor);
+            // On a chosen screen, other screens' edges don't count.
+            let monitor = cursor_monitor(cursor).filter(|m| self.fixed.is_none_or(|fixed| fixed == *m));
             let at_edge = monitor.is_some_and(|m| match self.panel_edge {
                 PanelEdge::Top => cursor.y <= m.top + 2,
                 PanelEdge::Bottom => cursor.y >= m.bottom - 2,
                 PanelEdge::Left => cursor.x <= m.left + 2,
                 PanelEdge::Right => cursor.x >= m.right - 2,
             });
+            self.reveal_at = None;
             let near_edge = monitor.is_some_and(|m| match self.panel_edge {
                 PanelEdge::Top => cursor.y <= m.top + (m.bottom - m.top) / 3,
                 PanelEdge::Bottom => cursor.y >= m.bottom - (m.bottom - m.top) / 3,
@@ -1020,6 +1176,7 @@ impl State {
             });
             if !dragging && at_edge && !fullscreen_foreground(self.hwnd) {
                 self.listen(false);
+                self.reveal_at = Some(cursor);
                 self.reveal();
                 self.start_poll(POLL_MS);
             } else if !near_edge {
@@ -1056,7 +1213,7 @@ impl State {
         self.listen(false);
         // Once the dock hides, a resting pointer counts its rest afresh.
         self.still_polls = 0;
-        if self.poll_ms != POLL_MS {
+        if self.autohide && self.poll_ms != POLL_MS {
             // HIDE_AFTER counts slow polls.
             self.start_poll(POLL_MS);
         }
@@ -1099,12 +1256,101 @@ impl State {
                 self.hide_tip();
                 self.hide_windows();
                 self.revealed = false;
+                self.edge_previous = None;
+                self.edge_held = None;
+                self.reveal_at = None;
                 self.start_slide(1.0);
                 return;
             }
         }
-        // Polling also catches volume changes from keys and other apps.
-        self.update_status();
+        if !self.autohide {
+            // Nothing to count: only fullscreen apps and clicks away from the
+            // flyout matter, and the flyout and window list need a quick answer.
+            let busy = self.flyout_open || windows_open || self.held;
+            self.set_poll(if busy { POLL_MS } else { QUIET_POLL_MS });
+        }
+    }
+
+    /// Checks sampled downward motion across stacked monitors, with no hook or clipping.
+    fn hold_bottom_crossing(&mut self, cursor: &mut POINT) {
+        // SAFETY: Querying mouse button state is lock-free and takes a virtual key code.
+        let dragging =
+            unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 || GetAsyncKeyState(VK_RBUTTON.0 as i32) < 0 };
+        if !self.visible
+            || !self.autohide
+            || self.suspended
+            || self.held
+            || dragging
+            || (self.display_mode == DisplayMode::Panel && self.panel_edge != PanelEdge::Bottom)
+        {
+            self.edge_previous = None;
+            self.edge_held = None;
+            return;
+        }
+        let previous = self.edge_previous.replace((*cursor, Instant::now()));
+        // Test the latch before resetting it: the second push can land well
+        // below the edge in a single poll and must still pass through freely.
+        let already_held = self.edge_held.is_some();
+        if !self.revealed
+            && !already_held
+            && let Some((previous, sampled)) = previous
+            && cursor.y > previous.y
+            && logic::glided(previous, *cursor, sampled.elapsed())
+            && let Some(upper) = cursor_monitor(previous)
+            && let Some(lower) = cursor_monitor(*cursor)
+            && upper.bottom == lower.top
+            && self.fixed.is_none_or(|fixed| fixed == upper)
+            && !fullscreen_foreground(self.hwnd)
+        {
+            let mut dpi_x = 96;
+            let mut dpi_y = 96;
+            // SAFETY: MonitorFromPoint handles any coordinates safely.
+            let monitor = unsafe { MonitorFromPoint(previous, MONITOR_DEFAULTTONULL) };
+            // SAFETY: GetDpiForMonitor reads monitor DPI when valid.
+            if unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) }.is_ok() {
+                let scale = dpi_x.max(96) as f32 / 96.0;
+                let layout_scale = logic::layout_scale(self.app_icon_size);
+                let mon_w = upper.right - upper.left;
+                let span = if self.display_mode == DisplayMode::Panel {
+                    let margin = (logic::margin(layout_scale) * scale).round() as i32;
+                    (upper.left + margin)..(upper.right - margin)
+                } else {
+                    let parts = self.parts();
+                    let has_divider = !self.pinned.is_empty() && self.items.len() > self.pinned.len();
+                    let capacity =
+                        logic::capacity_from_span(mon_w, scale, layout_scale, logic::status_width(&parts), has_divider);
+                    let scroll = self.scroll.min(self.items.len().saturating_sub(capacity));
+                    let count = self.items.len().saturating_sub(scroll).min(capacity);
+                    let pinned = self.pinned.len().saturating_sub(scroll).min(count);
+                    let layout = logic::AppLayout {
+                        count,
+                        pinned,
+                        show_search: self.show_search,
+                        panel_width: None,
+                        center_apps: false,
+                        vertical: false,
+                    };
+                    let width = (layout.total_width(&parts, layout_scale) * scale).ceil() as i32;
+                    let left = upper.left + (mon_w - width) / 2;
+                    left..(left + width)
+                };
+                if let Some(held) = logic::bottom_edge_hold(&[upper, lower], previous, *cursor, span.clone(), false)
+                    // SAFETY: SetCursorPos snaps the crossing pointer back onto `upper`'s edge.
+                    && unsafe { SetCursorPos(held.x, held.y) }.is_ok()
+                {
+                    *cursor = held;
+                    self.edge_previous = Some((held, Instant::now()));
+                    self.edge_held = Some((upper, span));
+                }
+            }
+        }
+        if self
+            .edge_held
+            .as_ref()
+            .is_some_and(|(upper, span)| !logic::at_held_edge(*upper, *cursor, span))
+        {
+            self.edge_held = None;
+        }
     }
 
     /// Starts or restarts the poll timer at `ms`.
@@ -1294,13 +1540,19 @@ impl State {
             return;
         }
         unsafe {
-            // The dock appears on the screen whose bottom edge the pointer
-            // touched, or stays on the primary screen.
+            // The dock appears on its chosen screen, or on the screen whose
+            // bottom edge the pointer touched.
             let mut cursor = POINT::default();
-            if self.autohide {
+            if let Some(point) = self.reveal_at.filter(|_| self.autohide && self.revealed) {
+                cursor = point;
+            } else if self.autohide {
                 let _ = GetCursorPos(&mut cursor);
             }
-            let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY);
+            let monitor = if let Some(fixed) = self.fixed {
+                MonitorFromRect(&fixed, MONITOR_DEFAULTTOPRIMARY)
+            } else {
+                MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY)
+            };
             let mut info = MONITORINFO {
                 cbSize: size_of::<MONITORINFO>() as u32,
                 ..Default::default()
@@ -1334,7 +1586,7 @@ impl State {
                     .into_iter()
                     .map(|shown| shown.icon)
                     .collect();
-                (self.tray, self.inline) = tray::update(Vec::new(), icons, size);
+                (self.tray, self.inline, self.hidden) = tray::update(Vec::new(), icons, size);
             }
             let size = logic::icon_pixels(self.dpi, self.app_icon_size);
             self.artwork.drain();
@@ -1558,8 +1810,10 @@ impl State {
             }
         }
         if self.flyout_open {
-            for (index, shown) in self.tray.iter().enumerate() {
-                rects.icons.insert(shown.icon.key(), self.cell_rect(index));
+            for (position, &index) in self.hidden.iter().enumerate() {
+                rects
+                    .icons
+                    .insert(self.tray[index].icon.key(), self.cell_rect(position));
             }
         }
         host.set_rects(rects);
@@ -1569,13 +1823,13 @@ impl State {
     fn sync_tray(&mut self) {
         let icons = self.tray_host.as_ref().map(TrayHost::icons).unwrap_or_default();
         let size = tray::icon_size(self.dpi);
-        (self.tray, self.inline) = tray::update(std::mem::take(&mut self.tray), icons, size);
-        if self.flyout_hover.is_some_and(|i| i >= self.tray.len()) {
+        (self.tray, self.inline, self.hidden) = tray::update(std::mem::take(&mut self.tray), icons, size);
+        if self.flyout_hover.is_some_and(|i| i >= self.hidden.len()) {
             self.flyout_hover = None;
         }
         let stale = match self.tip_target {
             Some(tray::Tip::Inline(i)) => i >= self.inline.len(),
-            Some(tray::Tip::Flyout(i)) => i >= self.tray.len(),
+            Some(tray::Tip::Flyout(i)) => i >= self.hidden.len(),
             Some(tray::Tip::Chevron) => self.tray_host.is_none(),
             // The desktop pill has nothing to do with the tray.
             None => false,
@@ -1604,7 +1858,7 @@ impl State {
             if !self.flyout_open {
                 self.open_flyout();
             }
-            self.flyout_hover = hover.filter(|&i| i < self.tray.len());
+            self.flyout_hover = hover.filter(|&i| i < self.hidden.len());
             self.tip_target = self.flyout_hover.map(tray::Tip::Flyout);
         } else {
             self.tip_target = match self.hover_part {
@@ -1648,7 +1902,7 @@ impl State {
     /// Sizes the flyout to its icons and centers it above the chevron.
     fn layout_flyout(&mut self) {
         let scale = self.dpi as f32 / 96.0;
-        let (width, height) = logic::flyout_size(self.tray.len());
+        let (width, height) = logic::flyout_size(self.hidden.len());
         let (width, height) = ((width * scale).round() as i32, (height * scale).round() as i32);
         let Some(chevron) = self.part_rect(logic::Part::Chevron) else {
             return;
@@ -2009,7 +2263,11 @@ impl State {
                 self.part_rect(logic::Part::Tray(i)),
             ),
             Some(tray::Tip::Flyout(i)) => (
-                self.tray.get(i).map(|shown| shown.icon.tip.clone()).unwrap_or_default(),
+                self.hidden
+                    .get(i)
+                    .and_then(|&index| self.tray.get(index))
+                    .map(|shown| shown.icon.tip.clone())
+                    .unwrap_or_default(),
                 Some(self.cell_rect(i)),
             ),
             None => return,
@@ -2230,7 +2488,7 @@ impl State {
         let Some(volume) = self.status.volume else { return };
         let (percent, rest) = logic::wheel_volume(volume.percent, self.wheel + delta);
         self.wheel = rest;
-        if percent != volume.percent
+        if (percent != volume.percent || (percent == 0 && !volume.muted))
             && let Err(error) = crate::commands::audio::set_volume(percent)
         {
             eprintln!("Dock volume: {error}");
@@ -2333,11 +2591,12 @@ impl State {
                 }
             }
 
-            // 3. Launch actions (New window, Run as Administrator, Open File Location)
+            // 3. Launch actions (New window, Run as Administrator, Open File Location, Properties)
             let _ = AppendMenuW(menu, MF_STRING, 10, w!("New window"));
             if path.is_some() {
                 let _ = AppendMenuW(menu, MF_STRING, 11, w!("Run as administrator"));
                 let _ = AppendMenuW(menu, MF_STRING, 12, w!("Open file location"));
+                let _ = AppendMenuW(menu, MF_STRING, 13, w!("Properties"));
             }
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
@@ -2439,6 +2698,12 @@ impl State {
                 if let Some(p) = &path {
                     let _ = crate::launch::reveal(p);
                 }
+            } else if command == 13 {
+                if let Some(p) = &path
+                    && let Err(error) = crate::launch::properties(p)
+                {
+                    eprintln!("Dock properties: {error}");
+                }
             } else if (100..100 + windows.len()).contains(&(command as usize)) {
                 let w_idx = (command as usize) - 100;
                 if let Some(w) = windows.get(w_idx) {
@@ -2461,6 +2726,7 @@ impl State {
             self.pinned.push(AppEntry {
                 id: item.app.id.clone(),
                 name: item.app.name.clone(),
+                aliases: item.app.aliases.clone(),
                 path: item.app.path.clone(),
             });
         }
@@ -2491,6 +2757,7 @@ fn load_pins() -> Vec<AppEntry> {
         .map(|pin| AppEntry {
             id: pin.id,
             name: pin.name,
+            aliases: Vec::new(),
             path: pin.path,
         })
         .collect()
@@ -2525,10 +2792,24 @@ fn cursor_monitor(cursor: POINT) -> Option<RECT> {
     (found && (monitor.left..monitor.right).contains(&cursor.x)).then_some(monitor)
 }
 
+/// The dock's screen: the chosen one, even before the hidden dock first moves
+/// there, or the one its window is on.
+fn dock_monitor(dock: HWND) -> HMONITOR {
+    match fixed_screen() {
+        // SAFETY: MonitorFromRect / MonitorFromWindow only inspect monitor topology.
+        Some(bounds) => unsafe { MonitorFromRect(&bounds, MONITOR_DEFAULTTONEAREST) },
+        None => unsafe { MonitorFromWindow(dock, MONITOR_DEFAULTTONEAREST) },
+    }
+}
+
 fn fullscreen_foreground(dock: HWND) -> bool {
     unsafe {
         let hwnd = GetForegroundWindow();
-        if hwnd.is_invalid() || hwnd == dock || IsIconic(hwnd).as_bool() {
+        if hwnd.is_invalid()
+            || hwnd == dock
+            || IsIconic(hwnd).as_bool()
+            || MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) != dock_monitor(dock)
+        {
             return false;
         }
         let mut pid = 0;
@@ -2637,9 +2918,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         {
             match msg {
                 WM_SETTINGCHANGE | WM_POWERBROADCAST | WM_THEMECHANGED => {
-                    let dark = s.palette.text.r > 0.5;
-                    let backdrop = s.backdrop;
-                    s.apply_material(dark, backdrop);
+                    let dark = s.dark;
+                    let (backdrop, tint) = (s.backdrop, s.tint);
+                    s.apply_material(dark, backdrop, tint);
+                    if msg == WM_POWERBROADCAST {
+                        s.update_status();
+                    }
+                }
+                WM_TIMECHANGE => {
+                    s.update_status();
+                    arm_clock(hwnd);
+                }
+                WM_DOCK_STATUS => {
+                    s.update_status();
+                    return LRESULT(0);
+                }
+                WM_TIMER if wp.0 == CLOCK_TIMER => {
+                    s.update_status();
+                    arm_clock(hwnd);
+                    return LRESULT(0);
                 }
                 WM_ARTWORK => {
                     s.artwork.drain();
@@ -2716,6 +3013,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     return LRESULT(0);
                 }
                 WM_DPICHANGED | WM_DISPLAYCHANGE => {
+                    if msg == WM_DISPLAYCHANGE {
+                        s.edge_previous = None;
+                        s.edge_held = None;
+                        s.resolve_screen();
+                    }
                     let _ = PostMessageW(Some(hwnd), WM_REFRESH, WPARAM(0), LPARAM(0));
                     return LRESULT(0);
                 }
@@ -2954,7 +3256,7 @@ unsafe extern "system" fn popup_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
             logic::flyout_hit(
                 (lp.0 as i16) as f32 / scale,
                 ((lp.0 >> 16) as i16) as f32 / scale,
-                s.tray.len(),
+                s.hidden.len(),
             )
         };
         match msg {
@@ -2963,6 +3265,7 @@ unsafe extern "system" fn popup_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
                 let _ = BeginPaint(hwnd, &mut paint);
                 let State {
                     tray,
+                    hidden,
                     palette,
                     dpi,
                     flyout_hover,
@@ -2989,6 +3292,7 @@ unsafe extern "system" fn popup_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
                             dpi: *dpi,
                             palette,
                             tray,
+                            hidden,
                             hover: *flyout_hover,
                         },
                     )
@@ -3023,8 +3327,10 @@ unsafe extern "system" fn popup_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
             }
             // Like the taskbar's overflow, the flyout closes once an icon is used.
             WM_LBUTTONUP | WM_RBUTTONUP => {
-                if let Some(index) = cell_at(&s, lp) {
-                    let rect = s.cell_rect(index);
+                if let Some(position) = cell_at(&s, lp)
+                    && let Some(&index) = s.hidden.get(position)
+                {
+                    let rect = s.cell_rect(position);
                     let center = POINT {
                         x: (rect.left + rect.right) / 2,
                         y: (rect.top + rect.bottom) / 2,

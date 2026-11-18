@@ -20,6 +20,11 @@ pub struct Config {
     pub position: String,
     pub dock: bool,
     pub dock_autohide: bool,
+    pub dock_search_button: bool,
+    /// `"pointer"`, `"main"`, or a screen's ID.
+    pub dock_screen: String,
+    /// `#RRGGBB` or `#RRGGBBAA`, or empty for the theme's colors.
+    pub dock_color: String,
     pub dock_icon_size: i64,
     pub hide_taskbar: bool,
     pub window_list: String,
@@ -87,6 +92,9 @@ impl Config {
             .filter(|value| *value >= 0)
             .ok_or("dock_icon_size must be a positive whole number of DIP.")?
             .clamp(24, 40);
+        let dock_color = string("dock_color")?;
+        validate_color(&dock_color)?;
+        let dock_screen = string("dock_screen")?;
         let max_results = get("max_results")
             .as_integer()
             .filter(|value| *value >= 0)
@@ -116,6 +124,9 @@ impl Config {
             position,
             dock: boolean("dock")?,
             dock_autohide: boolean("dock_autohide")?,
+            dock_search_button: boolean("dock_search_button")?,
+            dock_screen,
+            dock_color,
             dock_icon_size,
             hide_taskbar: boolean("hide_taskbar")?,
             window_list,
@@ -145,6 +156,32 @@ pub fn validate_url(value: &str) -> Result<(), String> {
     } else {
         Err("Add {query} where the search text should go.".into())
     }
+}
+
+/// Accepts an empty color (the theme's) or `#RRGGBB` / `#RRGGBBAA`.
+pub fn validate_color(value: &str) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    match value.strip_prefix('#') {
+        Some(hex) if matches!(hex.len(), 6 | 8) && hex.bytes().all(|b| b.is_ascii_hexdigit()) => Ok(()),
+        _ => Err("Use a color like #1E3A8A, or #1E3A8AC0 to set its opacity.".into()),
+    }
+}
+
+/// Splits a valid, non-empty color into `0xRRGGBB` and its opacity byte.
+#[allow(dead_code)]
+pub fn color_parts(value: &str) -> Option<(u32, u8)> {
+    validate_color(value).ok()?;
+    let hex = value.trim().strip_prefix('#')?;
+    let rgb = u32::from_str_radix(&hex[..6], 16).ok()?;
+    let alpha = if hex.len() == 8 {
+        u8::from_str_radix(&hex[6..], 16).ok()?
+    } else {
+        0xBF
+    };
+    Some((rgb, alpha))
 }
 
 pub fn path() -> Result<PathBuf, String> {
@@ -242,6 +279,13 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         "dock_icon_size" if !value.as_integer().is_some_and(|size| (24..=40).contains(&size)) => {
             return Err("Choose an app icon size between 24 and 40 DIP.".into());
         }
+        "dock_color" => validate_color(value.as_str().ok_or("Dock color must be text.")?)?,
+        "dock_screen" if !value.is_str() => {
+            return Err("dock_screen must be text.".into());
+        }
+        "dock_search_button" if value.as_bool().is_none() => {
+            return Err("dock_search_button must be true or false.".into());
+        }
         "theme"
         | "backdrop"
         | "max_results"
@@ -252,6 +296,8 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         | "position"
         | "dock"
         | "dock_autohide"
+        | "dock_search_button"
+        | "dock_screen"
         | "dock_icon_size"
         | "hide_taskbar" => {}
         "window_list" if !matches!(value.as_str(), Some("always" | "multiple" | "off")) => {
@@ -303,6 +349,9 @@ mod tests {
         assert_eq!(config.file_search_exclude.len(), 14);
         assert_eq!(config.position, "bottom");
         assert!(config.dock && config.dock_autohide && config.hide_taskbar);
+        assert!(config.dock_search_button);
+        assert_eq!(config.dock_screen, "pointer");
+        assert!(config.dock_color.is_empty());
         assert_eq!(config.dock_icon_size, 32);
         // A config from Wisp 0.3 has no dock keys and keeps the taskbar, as in the launcher.
         let old = Config::from_document(&"hotkey = 'Alt+Space'".parse().unwrap()).unwrap();
@@ -402,6 +451,9 @@ mod tests {
             ("window_list", "sometimes".into()),
             ("dock_icon_size", 23.into()),
             ("dock_icon_size", 41.into()),
+            ("dock_color", "not-a-color".into()),
+            ("dock_screen", 42.into()),
+            ("dock_search_button", "yes".into()),
             ("unknown", true.into()),
         ] {
             assert!(store.set(key, value).is_err(), "{key}");
@@ -409,8 +461,20 @@ mod tests {
         assert!(!store.path.exists());
         assert!(validate_url("https://example.com/?q={query}").is_ok());
         assert!(validate_url("https://example.com/?q={QUERY}").is_err());
+        assert!(validate_color("").is_ok());
+        assert!(validate_color("#1E3A8A").is_ok());
+        assert!(validate_color("#1E3A8AC0").is_ok());
+        assert!(validate_color("#123").is_err());
         assert_eq!(store.set("max_results", 20.into()).unwrap().max_results, 20);
         assert_eq!(store.set("dock_icon_size", 40.into()).unwrap().dock_icon_size, 40);
+        assert_eq!(store.set("dock_color", "#1E3A8A".into()).unwrap().dock_color, "#1E3A8A");
+        assert_eq!(store.set("dock_screen", "main".into()).unwrap().dock_screen, "main");
+        assert!(
+            !store
+                .set("dock_search_button", false.into())
+                .unwrap()
+                .dock_search_button
+        );
     }
 
     #[test]

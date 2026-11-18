@@ -2,6 +2,19 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.11 - 2026-11-17
+
+### Upstream Wisp Sync (`v0.7.0`–`v0.8.1+`)
+
+- **Dock screen selection (`dock_screen`)**: Choose `"pointer"`, `"main"`, or a specific display device path via `src/screens.rs`, `dock::fixed_screen()`, `dock::chosen_screen()`, `dock/space.rs`, and unified launcher placement (`MONITOR_DEFAULTTONEAREST` / fullscreen monitoring scoped to the chosen monitor).
+- **Custom dock and launcher surface color (`dock_color`)**: Added `#RRGGBB` / `#RRGGBBAA` validation and tint blending (`Palette::with_tint`, `MaterialKey`, `apply_tinted_backdrop`, `apply_tinted_moving_backdrop`) across the dock, popups, and launcher (`Config::read_from_path` falls back cleanly with a warning on invalid values while applying remaining config edits).
+- **Hideable dock search button (`dock_search_button`)**: Added `dock_search_button` (default `true`) and `AppLayout::first_slot()` support for both Dock and Panel modes.
+- **Missing-icons-only dock tray flyout**: `tray::update` now separates `shown`, `inline`, and `hidden` indices so the overflow flyout lists only tray icons absent from the dock row, with matching hit-testing, tooltips, and icon rectangles.
+- **Stacked monitor reveal & smoothstep polish**: Ported `logic::bottom_edge_hold`, `glided`, `at_held_edge`, hover fade easing via `crate::ease`, and `hide` / `DisplayChange` cleanup so auto-hide docks pause cleanly at shared bottom-top edges across stacked monitors.
+- **Search, indexer, and Windows Search improvements**: Added indexed app alias matching (`AppEntry::aliases`, shell/shortcut/console target inspection, literal prefix alias ranking) and real filesystem paths (`System.ItemUrl` + `DBSTATUS_S_OK`) for Windows Search results alongside Everything integration.
+- **Event-driven dock status & audio controls**: Wired Core Audio `notify_level_changes` (`WM_DOCK_STATUS`), minute-aligned `CLOCK_TIMER`, `WM_TIMECHANGE` / `WM_POWERBROADCAST` refreshes, `QUIET_POLL_MS` when the dock stays visible, mute-at-0% volume (`Command::Volume` + `wheel_volume`), smooth slider dragging (`press_slider` / `drag_slider`) with speaker mute-click separation, and `ReleaseCapture` on hide.
+- **Input, hook, and context menu fixes**: Upgraded `WinKeyTracker` to a 256-bit `held: [u64; 4]` bitset with `GetAsyncKeyState` seeding, `WH_MOUSE_LL` click cancellation, `LLKHF_INJECTED` filtering, and `0xE8` chord masking; ignored keys while the unified launcher is closed; added `Properties` to the dock app context menu; added `crate::theme::filter_broadcast` to skip redundant shell/power broadcasts.
+
 ## 0.0.10 - 2026-11-12
 
 ### Follow-Up Audit Remediation (U09, U12)

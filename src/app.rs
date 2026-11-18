@@ -27,6 +27,9 @@ use crate::drag::{self, Payload};
 use crate::files::{self, FileResults, FileSearch};
 use crate::history::History;
 use crate::indexer::{AppEntry, IconPixels, IndexEvent, Indexer};
+use crate::messages::{
+    WM_APP_COMMANDS, WM_APP_FILES, WM_APP_FRAME, WM_APP_INDEX, WM_APP_QUIT, WM_APP_RELOAD, WM_APP_SHOW, WM_APP_TOGGLE,
+};
 use crate::render::{Frame, Renderer, SurfaceFrame, layout};
 use crate::search::{self, Action, Drill, FileScope, Kind, ResultItem, Searcher};
 use crate::surface::nav::{self, Direction, Rect};
@@ -35,18 +38,11 @@ use crate::taskbar::{self, TaskbarHider};
 use crate::theme::Palette;
 use crate::{hotkey, launch, system, tray, util};
 
-const WM_APP_FRAME: u32 = WM_APP + 8;
-const WM_APP_INDEX: u32 = WM_APP + 2;
-const WM_APP_FILES: u32 = WM_APP + 5;
-const WM_APP_SHOW: u32 = WM_APP + 3;
-const WM_APP_TOGGLE: u32 = WM_APP + 9;
-const WM_APP_QUIT: u32 = WM_APP + 4;
-/// wisp-settings posts this message after it changes the config.
-const WM_APP_RELOAD: u32 = WM_APP + 6;
+/// How far left of a slider's track, in DIPs, a press still grabs it.
+const SLIDER_GRAB: f32 = 8.0;
 /// Drives the scripted capture of the dock and the launcher.
 const REEL_TIMER: usize = 96;
 const REEL_MS: u32 = 50;
-const WM_APP_COMMANDS: u32 = WM_APP + 7;
 const CLASS_NAME: PCWSTR = crate::channel::LAUNCHER_CLASS;
 const HOTKEY_ID: i32 = 1;
 const HOTKEY_RECOVERY: i32 = 2;
@@ -258,6 +254,8 @@ pub fn run() -> Result<()> {
             registered_hotkey: None,
             tray_icon: small_icon,
             palette: Palette::new(true, true),
+            dark: true,
+            material: None,
             renderer,
             dpi: system_dpi,
             position: (0, 0),
@@ -275,6 +273,7 @@ pub fn run() -> Result<()> {
             last_mouse: None,
             drag_press: None,
             drag_consumed: false,
+            slider_drag: None,
             apps: Vec::new(),
             icons: HashMap::new(),
             history: History::load(),
@@ -416,6 +415,8 @@ struct Launcher {
     registered_hotkey: Option<String>,
     tray_icon: HICON,
     palette: Palette,
+    dark: bool,
+    material: Option<crate::theme::MaterialKey>,
     renderer: Renderer,
     dpi: u32,
     /// Screen coordinates of the launcher's left edge and its top edge, or its
@@ -443,6 +444,9 @@ struct Launcher {
     last_mouse: Option<(i32, i32)>,
     drag_press: Option<((i32, i32), Payload)>,
     drag_consumed: bool,
+    /// The id of the surface slider held under the mouse button, and the
+    /// value last sent for it.
+    slider_drag: Option<(String, Option<u32>)>,
 
     apps: Vec<AppEntry>,
     icons: HashMap<String, Arc<IconPixels>>,
@@ -635,11 +639,16 @@ impl Launcher {
             return;
         }
         self.config_mtime = mtime;
-        let (config, error) = config::load();
-        if let Some(error) = error {
-            // Keep the last valid config so a read or parse error does not change it.
-            tray::notify(self.hwnd, "LeanShell config", &error, true);
-            return;
+        let (config, warning) = match config::read() {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                // Keep the last valid config so a read or parse error does not change it.
+                tray::notify(self.hwnd, "LeanShell config", &error, true);
+                return;
+            }
+        };
+        if let Some(warning) = warning {
+            tray::notify(self.hwnd, "LeanShell config", &warning, true);
         }
         self.config = config;
         self.taskbar_failures = 0;
@@ -686,6 +695,8 @@ impl Launcher {
             dock.set_apps(&self.apps, &self.icons);
             dock.set_window_list_mode(self.config.window_list);
             dock.set_app_icon_size(self.config.dock_icon_size as u32);
+            dock.set_show_search(self.config.dock_search_button);
+            dock.set_screen(&self.config.dock_screen);
             // Notification icons are hosted in LeanShell's dock.
             dock.set_tray(true);
             let autohide = if self.config.display_mode == DisplayMode::Panel {
@@ -841,10 +852,17 @@ impl Launcher {
             Theme::Light => false,
             Theme::System => !system::system_uses_light_theme(),
         };
-        self.palette = crate::theme::apply_backdrop(self.hwnd, dark, self.config.backdrop, self.unified());
+        self.dark = dark;
+        let tint = config::dock_tint(&self.config);
+        let key = crate::theme::MaterialKey::new(dark, self.config.backdrop, tint);
         if let Some(dock) = &mut self.dock {
-            dock.apply_theme(Palette::new(dark, true), self.config.backdrop);
+            dock.apply_theme(dark, self.config.backdrop, tint);
         }
+        if self.material == Some(key) {
+            return;
+        }
+        self.material = Some(key);
+        self.palette = crate::theme::apply_tinted_backdrop(self.hwnd, dark, self.config.backdrop, self.unified(), tint);
         self.invalidate();
     }
 
@@ -952,7 +970,13 @@ impl Launcher {
     }
 
     fn hide(&mut self) {
-        self.drag_press = None;
+        // Hiding mid-press: the button-up may never come, so give the mouse back.
+        if self.drag_press.take().is_some() | self.slider_drag.take().is_some() {
+            // SAFETY: ReleaseCapture balances the SetCapture taken when starting a drag.
+            unsafe {
+                let _ = ReleaseCapture();
+            }
+        }
         if !self.visible {
             return;
         }
@@ -989,13 +1013,19 @@ impl Launcher {
         }
     }
 
-    /// Uses the monitor under the cursor. Reduces the result count and moves
-    /// the launcher up if needed to keep it within the work area.
+    /// Uses the monitor under the cursor, or the dock's chosen screen when the
+    /// launcher grows out of the dock. Reduces the result count and moves the
+    /// launcher up if needed to keep it within the work area.
     fn place_on_active_monitor(&mut self) {
         let work = unsafe {
-            let mut cursor = POINT::default();
-            let _ = GetCursorPos(&mut cursor);
-            let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+            let monitor = match dock::chosen_screen().filter(|_| self.unified()) {
+                Some(bounds) => MonitorFromRect(&bounds, MONITOR_DEFAULTTONEAREST),
+                None => {
+                    let mut cursor = POINT::default();
+                    let _ = GetCursorPos(&mut cursor);
+                    MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST)
+                }
+            };
             let mut info = MONITORINFO {
                 cbSize: size_of::<MONITORINFO>() as u32,
                 ..Default::default()
@@ -1222,11 +1252,12 @@ impl Launcher {
         });
         // Composition acrylic re-blurs on every resize. Use its solid tint during
         // motion, then restore the live material once the geometry settles.
-        self.palette = crate::theme::apply_backdrop(
+        self.material = None;
+        self.palette = crate::theme::apply_tinted_moving_backdrop(
             self.hwnd,
-            self.palette.text.r > 0.5,
-            crate::config::Backdrop::Solid,
-            true,
+            self.dark,
+            self.config.backdrop,
+            config::dock_tint(&self.config),
         );
         self.morph.as_mut().unwrap().start = Instant::now();
         self.outline = Some(from);
@@ -1579,7 +1610,7 @@ impl Launcher {
             Command::Volume(percent) => {
                 if let Some(Some(audio)) = &mut self.command_state.audio {
                     audio.volume = *percent;
-                    audio.muted = false;
+                    audio.muted = *percent == 0;
                 }
             }
             Command::Mute(muted) => {
@@ -2336,16 +2367,19 @@ impl Launcher {
             .stop_at(x as f32 * scale, y as f32 * scale)
             .filter(|(widget, _)| *widget == index)
             .map(|(_, stop)| stop);
-        let Some(point) = self.surface_point(x, y) else {
+        if self.surface_point(x, y).is_none() {
             return;
-        };
+        }
         let Some(open) = &mut self.surface else {
             return;
         };
         match &open.widgets[index].input {
-            Input::Slider { target, .. } => {
-                let command = target.command(nav::slider_value(&open.rects[index], point.0));
-                self.run_command(command);
+            Input::Slider { .. } => {
+                // A press on the track starts a drag instead; this is the
+                // speaker or the name, which mutes as Enter does.
+                if let Some(Action::Command(command)) = open.widgets[index].activate(0) {
+                    self.run_command(command);
+                }
             }
             Input::Choice { .. } | Input::Buttons { .. } => {
                 if let Some(stop) = stop {
@@ -2354,6 +2388,63 @@ impl Launcher {
                 }
             }
             _ => self.activate_surface(),
+        }
+    }
+
+    /// Starts dragging a slider pressed at window point (`x`, `y`): it jumps
+    /// to the press and follows the mouse until the button comes up.
+    fn press_slider(&mut self, x: i32, y: i32) -> bool {
+        let Some(index) = self.widget_at(x, y) else {
+            return false;
+        };
+        let Some(open) = &self.surface else {
+            return false;
+        };
+        let widget = &open.widgets[index];
+        if !matches!(widget.input, Input::Slider { .. }) {
+            return false;
+        }
+        // The speaker and the name are not the track: a click there mutes.
+        let Some((sx, _)) = self.surface_point(x, y) else {
+            return false;
+        };
+        if sx < nav::slider_track(&open.rects[index]).0 - SLIDER_GRAB {
+            return false;
+        }
+        self.slider_drag = Some((widget.id.clone(), None));
+        self.focus_widget(index);
+        self.drag_slider(x);
+        true
+    }
+
+    /// Moves the dragged slider to window x coordinate `x`, which may be
+    /// outside the slider or the window.
+    fn drag_slider(&mut self, x: i32) {
+        let (Some((id, sent)), Some(open)) = (&self.slider_drag, &self.surface) else {
+            return;
+        };
+        let Some(index) = open.widgets.iter().position(|w| &w.id == id) else {
+            return;
+        };
+        let Input::Slider { value, muted, target } = &open.widgets[index].input else {
+            return;
+        };
+        let (ox, _) = crate::render::surface_origin(self.bottom());
+        let sx = x as f32 * 96.0 / self.dpi as f32 - ox;
+        let new = nav::slider_value(&open.rects[index], sx);
+        // Compare with the value last sent, not the shown one, which a device
+        // that snaps to coarse steps can move back. The first press also
+        // unmutes, even at the shown value.
+        let changed = match sent {
+            Some(sent) => new != *sent,
+            None => new != *value || (*muted && new > 0),
+        };
+        if changed {
+            let command = target.command(new);
+            if let Some((_, sent)) = &mut self.slider_drag {
+                *sent = Some(new);
+            }
+            self.run_command(command);
         }
     }
 
@@ -2486,6 +2577,15 @@ fn run_drag(hwnd: HWND, payload: Payload) {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // SAFETY: filter_broadcast only inspects valid WM_SETTINGCHANGE/WM_POWERBROADCAST payloads on the UI thread.
+    let Some(filtered) = (unsafe { crate::theme::filter_broadcast(msg, wparam, lparam) }) else {
+        // SAFETY: Forwarding unfiltered/ignored messages to DefWindowProcW is safe.
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    };
+    if filtered != msg {
+        // SAFETY: Dispatching the reclassified message (`WM_THEMECHANGED`) on the same window handle.
+        return unsafe { wndproc(hwnd, filtered, wparam, LPARAM(0)) };
+    }
     if DRAGGING.with(Cell::get)
         && matches!(
             msg,
@@ -2692,9 +2792,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_APP_COMMANDS => with_launcher_or_defer(DEFER_COMMANDS, Launcher::drain_command_events),
         WM_ACTIVATE if loword(wparam.0) == WA_INACTIVE => with_launcher_or_defer(DEFER_HIDE, Launcher::hide),
         WM_DPICHANGED => {
-            with_launcher(|l| l.on_dpi_changed(loword(wparam.0)));
+            with_launcher(|l| {
+                if let Some(dock) = &l.dock {
+                    dock.dispatch(msg, wparam, lparam);
+                }
+                l.on_dpi_changed(loword(wparam.0));
+            });
             return LRESULT(0);
         }
+        // The closed launcher's window is the dock's, and a menu can leave it
+        // in front. Keys typed then must not edit a launcher no one sees.
+        WM_KEYDOWN | WM_SYSKEYDOWN | WM_CHAR if with_launcher(|l| !l.visible) == Some(true) => {}
         WM_KEYDOWN | WM_SYSKEYDOWN => {
             // Holding Enter must not toggle a radio again after its worker finishes.
             if wparam.0 == VK_RETURN.0 as usize
@@ -2718,6 +2826,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let point = mouse_pos(lparam);
             with_launcher(|l| {
                 l.drag_consumed = false;
+                l.slider_drag = None;
+                if l.visible && l.surface.is_some() && l.morph.is_none() {
+                    let (x, y) = l.content_point(point.0, point.1);
+                    if l.press_slider(x, y) {
+                        l.drag_press = None;
+                        // SAFETY: SetCapture captures mouse input on the launcher window while dragging a slider.
+                        unsafe {
+                            SetCapture(hwnd);
+                        }
+                        return;
+                    }
+                }
                 l.drag_press = if l.visible && l.surface.is_none() && l.morph.is_none() {
                     l.row_at(point.1)
                         .and_then(|row| l.results.get(row))
@@ -2734,11 +2854,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             });
         }
         WM_CAPTURECHANGED => {
-            with_launcher(|l| l.drag_press = None);
+            with_launcher(|l| {
+                l.drag_press = None;
+                l.slider_drag = None;
+            });
         }
         WM_MOUSEMOVE => {
             let (x, y) = mouse_pos(lparam);
             let payload = with_launcher(|l| {
+                if l.slider_drag.is_some() {
+                    if wparam.0 & 1 == 0 {
+                        // The button-up went elsewhere.
+                        l.slider_drag = None;
+                        // SAFETY: ReleaseCapture balances SetCapture after missed button-up.
+                        unsafe {
+                            let _ = ReleaseCapture();
+                        }
+                    } else {
+                        let (x, _) = l.content_point(x, y);
+                        l.drag_slider(x);
+                        return None;
+                    }
+                }
                 if wparam.0 & 1 == 0 {
                     l.drag_press = None;
                 } else if let Some((start, _)) = l.drag_press.as_ref() {
@@ -2766,6 +2903,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_LBUTTONUP => {
             let (x, y) = mouse_pos(lparam);
             with_launcher(|l| {
+                if l.slider_drag.is_some() {
+                    let (x, _) = l.content_point(x, y);
+                    l.drag_slider(x);
+                    l.slider_drag = None;
+                    // SAFETY: ReleaseCapture balances SetCapture at end of slider drag.
+                    unsafe {
+                        let _ = ReleaseCapture();
+                    }
+                    return;
+                }
                 let consumed = std::mem::take(&mut l.drag_consumed);
                 let captured = l.drag_press.take().is_some();
                 if captured {
@@ -2809,6 +2956,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             return LRESULT(0);
         },
         WM_ERASEBKGND => return LRESULT(1),
+        // Battery saver and theme changes can turn transparency off.
+        WM_THEMECHANGED | WM_POWERBROADCAST => {
+            with_launcher(Launcher::apply_theme);
+        }
+        WM_TIMECHANGE => {
+            with_launcher(|l| {
+                if let Some(dock) = &l.dock {
+                    dock.dispatch(msg, wparam, lparam);
+                }
+            });
+        }
         WM_SETTINGCHANGE => {
             // Explorer waits for every window while it broadcasts this, and
             // the taskbar hider asks Explorer for its state: let it go first.
@@ -2817,10 +2975,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             with_launcher(|l| {
                 l.on_taskbar_message(msg);
-                l.apply_theme();
             });
         }
         WM_DISPLAYCHANGE | taskbar::WM_TASKBAR_SHOW | taskbar::WM_RECOVERY_DONE => {
+            if msg == WM_DISPLAYCHANGE {
+                with_launcher(|l| {
+                    if let Some(dock) = &l.dock {
+                        dock.dispatch(msg, wparam, lparam);
+                    }
+                });
+            }
             unsafe {
                 let _ = ReplyMessage(LRESULT(0));
             }

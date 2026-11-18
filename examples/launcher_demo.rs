@@ -7,12 +7,18 @@ mod calc;
 mod commands;
 #[path = "../src/config.rs"]
 mod config;
+#[path = "../src/config_write.rs"]
+mod config_write;
+#[path = "../src/deferred.rs"]
+mod deferred;
 #[path = "../src/desktop.rs"]
 mod desktop;
 #[path = "../src/dock.rs"]
 mod dock;
 #[path = "../src/drag.rs"]
 mod drag;
+#[path = "../src/ease.rs"]
+mod ease;
 #[path = "../src/editor.rs"]
 mod editor;
 #[path = "../src/files.rs"]
@@ -27,10 +33,16 @@ mod indexer;
 mod install;
 #[path = "../src/launch.rs"]
 mod launch;
+#[path = "../src/messages.rs"]
+mod messages;
 #[path = "../src/morph.rs"]
 mod morph;
+#[path = "../src/panic_log.rs"]
+mod panic_log;
 #[path = "../src/render.rs"]
 mod render;
+#[path = "../src/screens.rs"]
+mod screens;
 #[path = "../src/search.rs"]
 mod search;
 #[path = "../src/startup.rs"]

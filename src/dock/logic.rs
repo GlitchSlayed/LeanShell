@@ -13,9 +13,73 @@ pub const ICON_CENTER_Y: f32 = 26.0;
 pub const INDICATOR_TOP: f32 = 46.0;
 
 pub fn slide_value(from: f32, to: f32, progress: f32) -> f32 {
-    let t = progress.clamp(0.0, 1.0);
-    let ease = t * t * (3.0 - 2.0 * t);
-    from + (to - from) * ease
+    from + (to - from) * crate::ease::smoothstep(progress)
+}
+
+/// The fastest pointer the edge hold follows, in physical pixels a second.
+/// A faster step is a jump, not a glide: a pen or touch tap, Remote Desktop,
+/// or an app moving the pointer.
+const MAX_GLIDE_SPEED: f64 = 10_000.0;
+/// An older sample is from before a pause, not from the same motion.
+const MAX_SAMPLE_GAP: std::time::Duration = std::time::Duration::from_millis(250);
+/// The fast poll's interval: samples closer together still allow this much travel.
+const MIN_SAMPLE_GAP: std::time::Duration = std::time::Duration::from_millis(15);
+
+/// Whether the pointer could have glided from `previous` to `current` in
+/// `elapsed`, rather than jumped there.
+pub fn glided(
+    previous: windows::Win32::Foundation::POINT,
+    current: windows::Win32::Foundation::POINT,
+    elapsed: std::time::Duration,
+) -> bool {
+    if elapsed > MAX_SAMPLE_GAP {
+        return false;
+    }
+    let distance = f64::from(current.x - previous.x).hypot(f64::from(current.y - previous.y));
+    distance <= MAX_GLIDE_SPEED * elapsed.max(MIN_SAMPLE_GAP).as_secs_f64()
+}
+
+/// Hold one downward crossing of a shared monitor edge inside the dock's span.
+/// All coordinates are physical pixels; right and bottom edges are exclusive.
+/// This only decides geometry and never reads or changes the actual pointer.
+pub fn bottom_edge_hold(
+    monitors: &[windows::Win32::Foundation::RECT],
+    previous: windows::Win32::Foundation::POINT,
+    current: windows::Win32::Foundation::POINT,
+    dock_span: std::ops::Range<i32>,
+    already_held: bool,
+) -> Option<windows::Win32::Foundation::POINT> {
+    use windows::Win32::Foundation::POINT;
+    if already_held || current.y <= previous.y || !dock_span.contains(&current.x) {
+        return None;
+    }
+    let contains = |rect: &&windows::Win32::Foundation::RECT, point: POINT| {
+        (rect.left..rect.right).contains(&point.x) && (rect.top..rect.bottom).contains(&point.y)
+    };
+    let upper = monitors.iter().find(|rect| contains(rect, previous))?;
+    let lower = monitors.iter().find(|rect| contains(rect, current))?;
+    if upper.bottom != lower.top || !(upper.left..upper.right).contains(&current.x) {
+        return None;
+    }
+    // Interpolate the sampled motion: a diagonal must cross the shared edge
+    // inside the dock too, rather than merely finish below its horizontal span.
+    let fraction = (f64::from(upper.bottom) - f64::from(previous.y)) / (f64::from(current.y) - f64::from(previous.y));
+    let crossing_x = f64::from(previous.x) + (f64::from(current.x) - f64::from(previous.x)) * fraction;
+    let left = upper.left.max(lower.left).max(dock_span.start);
+    let right = upper.right.min(lower.right).min(dock_span.end);
+    (crossing_x >= f64::from(left) && crossing_x < f64::from(right)).then_some(POINT {
+        x: current.x,
+        y: upper.bottom - 1,
+    })
+}
+
+/// Keep the consumed hold only in the two-pixel band on either side of the seam.
+pub fn at_held_edge(
+    monitor: windows::Win32::Foundation::RECT,
+    cursor: windows::Win32::Foundation::POINT,
+    dock_span: &std::ops::Range<i32>,
+) -> bool {
+    dock_span.contains(&cursor.x) && cursor.y >= monitor.bottom - 2 && cursor.y < monitor.bottom + 2
 }
 
 pub fn icon_pixels(dpi: u32, size: f32) -> i32 {
@@ -78,6 +142,7 @@ pub fn left(index: usize) -> f32 {
     PAD + index as f32 * SLOT
 }
 
+#[cfg(test)]
 pub fn left_scaled(index: usize, scale: f32) -> f32 {
     left(index) * scale
 }
@@ -102,6 +167,7 @@ pub const PANEL_END_PAD: f32 = 14.0;
 pub struct AppLayout {
     pub count: usize,
     pub pinned: usize,
+    pub show_search: bool,
     pub panel_width: Option<f32>,
     pub center_apps: bool,
     pub vertical: bool,
@@ -113,6 +179,12 @@ impl AppLayout {
     }
     pub fn gap(self) -> f32 {
         if self.divider() { SEPARATOR } else { 0.0 }
+    }
+    pub fn search_shift(self) -> f32 {
+        if self.show_search { 0.0 } else { SLOT }
+    }
+    pub fn first_slot(self) -> usize {
+        usize::from(!self.show_search)
     }
     pub fn offset_x(self, scale: f32) -> f32 {
         if self.center_apps
@@ -126,7 +198,7 @@ impl AppLayout {
     }
     pub fn left(self, index: usize, scale: f32) -> f32 {
         self.offset_x(scale)
-            + (left(index)
+            + (left(index) - self.search_shift()
                 + if self.divider() && index > self.pinned {
                     SEPARATOR
                 } else {
@@ -135,17 +207,18 @@ impl AppLayout {
                 * scale
     }
     pub fn width(self, scale: f32) -> f32 {
-        width_scaled(self.count, scale) + self.gap() * scale
+        width_scaled(self.count, scale) + (self.gap() - self.search_shift()) * scale
     }
     pub fn total_width(self, parts: &[Part], scale: f32) -> f32 {
-        total_width_scaled(self.count, parts, scale) + self.gap() * scale
+        total_width_scaled(self.count, parts, scale) + (self.gap() - self.search_shift()) * scale
     }
     pub fn hit(self, x: f32, y: f32, scale: f32) -> Option<usize> {
         let (cross, main) = if self.vertical { (x, y) } else { (y, x) };
         if !(0.0..height(scale)).contains(&cross) {
             return None;
         }
-        (0..=self.count).find(|&i| (self.left(i, scale)..self.left(i, scale) + slot(scale)).contains(&main))
+        (self.first_slot()..=self.count)
+            .find(|&i| (self.left(i, scale)..self.left(i, scale) + slot(scale)).contains(&main))
     }
     pub fn part_left(self, part: Part, parts: &[Part], scale: f32) -> Option<f32> {
         if let Some(pw) = self.panel_width {
@@ -156,7 +229,7 @@ impl AppLayout {
             let parts_start = pw - end_pad - parts_w;
             Some(parts_start + offset)
         } else {
-            part_left_scaled(part, self.count, parts, scale).map(|x| x + self.gap() * scale)
+            part_left_scaled(part, self.count, parts, scale).map(|x| x + (self.gap() - self.search_shift()) * scale)
         }
     }
     pub fn part_hit(self, x: f32, y: f32, parts: &[Part], scale: f32) -> Option<Part> {
@@ -178,7 +251,13 @@ impl AppLayout {
             }
             None
         } else {
-            part_hit_scaled(main - self.gap() * scale, cross, self.count, parts, scale)
+            part_hit_scaled(
+                main - (self.gap() - self.search_shift()) * scale,
+                cross,
+                self.count,
+                parts,
+                scale,
+            )
         }
     }
 }
@@ -474,6 +553,7 @@ mod tests {
                 let layout = AppLayout {
                     count,
                     pinned,
+                    show_search: true,
                     panel_width: None,
                     center_apps: false,
                     vertical: false,
@@ -503,9 +583,23 @@ mod tests {
                 let clock = layout.part_left(Part::Clock, &parts, scale).unwrap();
                 assert_eq!(clock + (CLOCK_W + PAD) * scale, layout.total_width(&parts, scale));
 
+                let hidden_search = AppLayout {
+                    show_search: false,
+                    ..layout
+                };
+                if count > 0 {
+                    assert_eq!(hidden_search.left(1, scale), pad(scale));
+                    assert_eq!(hidden_search.hit(pad(scale) + 1.0, 10.0, scale), Some(1));
+                }
+                for part in &parts {
+                    let px = hidden_search.part_left(*part, &parts, scale).unwrap();
+                    assert_eq!(hidden_search.part_hit(px + 1.0, 10.0, &parts, scale), Some(*part));
+                }
+
                 let panel_layout = AppLayout {
                     count,
                     pinned,
+                    show_search: true,
                     panel_width: Some(1920.0),
                     center_apps: false,
                     vertical: false,
@@ -523,6 +617,7 @@ mod tests {
                 let centered_layout = AppLayout {
                     count,
                     pinned,
+                    show_search: true,
                     panel_width: Some(1920.0),
                     center_apps: true,
                     vertical: false,
@@ -542,6 +637,7 @@ mod tests {
             let v_layout = AppLayout {
                 count: 3,
                 pinned: 1,
+                show_search: true,
                 panel_width: Some(1080.0),
                 center_apps: false,
                 vertical: true,
@@ -660,11 +756,13 @@ mod tests {
                 id: "{folder}\\a.exe".into(),
                 path: Some(r"C:\Apps\a.exe".into()),
                 name: "A".into(),
+                aliases: Vec::new(),
             },
             AppEntry {
                 id: "Package!App".into(),
                 path: None,
                 name: "Store".into(),
+                aliases: Vec::new(),
             },
         ];
         assert_eq!(match_app(&apps, r"\\?\C:\APPS\A.EXE", None).unwrap().name, "A");
@@ -781,5 +879,204 @@ mod tests {
         assert_eq!(flyout_hit(x + 1.0, y + 1.0, 6), None);
         assert_eq!(flyout_hit(FLYOUT_PAD - 1.0, 10.0, 3), None);
         assert_eq!(flyout_hit(FLYOUT_PAD + 5.0 * FLYOUT_CELL + 1.0, 10.0, 9), None);
+    }
+}
+
+#[cfg(test)]
+mod edge_tests {
+    use super::{at_held_edge, bottom_edge_hold, glided};
+    use std::time::Duration;
+    use windows::Win32::Foundation::{POINT, RECT};
+
+    const UPPER: RECT = RECT {
+        left: 0,
+        top: 0,
+        right: 2560,
+        bottom: 1440,
+    };
+    const LOWER: RECT = RECT {
+        left: 390,
+        top: 1440,
+        right: 2310,
+        bottom: 2520,
+    };
+
+    fn point(x: i32, y: i32) -> POINT {
+        POINT { x, y }
+    }
+
+    #[test]
+    fn stacked_crossing_holds_at_last_physical_row_at_any_sample_speed() {
+        for previous_y in [0, 1300, 1437, 1438, 1439] {
+            for current_y in [1440, 1441, 1500, 2519] {
+                assert_eq!(
+                    bottom_edge_hold(
+                        &[UPPER, LOWER],
+                        point(1280, previous_y),
+                        point(1280, current_y),
+                        960..1600,
+                        false
+                    ),
+                    Some(point(1280, 1439))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn jumps_and_samples_from_before_a_pause_are_not_glides() {
+        let ms = Duration::from_millis;
+        assert!(glided(point(1280, 1380), point(1280, 1500), ms(30)));
+        assert!(glided(point(1280, 1420), point(1280, 1450), ms(15)));
+        assert!(glided(point(1280, 1100), point(1280, 1500), ms(100)));
+        assert!(glided(point(1280, 1400), point(1280, 1500), ms(5)));
+        assert!(!glided(point(1280, 600), point(1280, 2280), ms(15)));
+        assert!(!glided(point(1280, 600), point(1280, 2280), ms(100)));
+        assert!(!glided(point(1280, 1300), point(1280, 2280), ms(30)));
+        assert!(!glided(point(100, 1430), point(1280, 1450), ms(15)));
+        assert!(!glided(point(1280, 1438), point(1280, 1442), ms(400)));
+    }
+
+    #[test]
+    fn three_screens_hold_each_shared_edge_but_not_the_last() {
+        let top = RECT {
+            top: -1080,
+            bottom: 0,
+            ..UPPER
+        };
+        let monitors = [top, UPPER, LOWER];
+        assert_eq!(
+            bottom_edge_hold(&monitors, point(1280, -20), point(1280, 30), 960..1600, false),
+            Some(point(1280, -1))
+        );
+        assert_eq!(
+            bottom_edge_hold(&monitors, point(1280, 1400), point(1280, 1500), 960..1600, false),
+            Some(point(1280, 1439))
+        );
+        assert_eq!(
+            bottom_edge_hold(&monitors, point(1280, 2500), point(1280, 2520), 960..1600, false),
+            None
+        );
+    }
+
+    #[test]
+    fn isolated_side_by_side_gaps_and_upward_motion_pass_freely() {
+        let beside = RECT {
+            left: 2560,
+            right: 4480,
+            top: 0,
+            bottom: 1440,
+        };
+        let gap = RECT { top: 1441, ..LOWER };
+        for monitors in [vec![UPPER], vec![UPPER, beside], vec![UPPER, gap]] {
+            assert_eq!(
+                bottom_edge_hold(&monitors, point(1280, 1400), point(1280, 1500), 960..1600, false),
+                None
+            );
+        }
+        assert_eq!(
+            bottom_edge_hold(
+                &[UPPER, beside],
+                point(2550, 1430),
+                point(2570, 1435),
+                2400..2600,
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            bottom_edge_hold(&[UPPER, LOWER], point(1280, 1500), point(1280, 1400), 960..1600, false),
+            None
+        );
+    }
+
+    #[test]
+    fn dock_span_and_actual_shared_width_are_half_open() {
+        for (x, expected) in [
+            (959, None),
+            (960, Some(point(960, 1439))),
+            (1599, Some(point(1599, 1439))),
+            (1600, None),
+            (200, None),
+            (2400, None),
+        ] {
+            assert_eq!(
+                bottom_edge_hold(&[UPPER, LOWER], point(x, 1400), point(x, 1500), 960..1600, false),
+                expected
+            );
+        }
+        assert_eq!(
+            bottom_edge_hold(&[UPPER, LOWER], point(0, 1439), point(1280, 1500), 960..1600, false),
+            None
+        );
+        let offset = RECT {
+            left: 2000,
+            right: 3920,
+            ..LOWER
+        };
+        assert_eq!(
+            bottom_edge_hold(
+                &[UPPER, offset],
+                point(2200, 1400),
+                point(2700, 1500),
+                2000..2800,
+                false
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn second_push_is_free_and_leaving_then_reapproaching_can_hold_again() {
+        let monitors = [UPPER, LOWER];
+        let held = bottom_edge_hold(&monitors, point(1280, 1400), point(1280, 1500), 960..1600, false).unwrap();
+        assert_eq!(
+            bottom_edge_hold(&monitors, held, point(1280, 1500), 960..1600, true),
+            None
+        );
+        assert_eq!(
+            bottom_edge_hold(&monitors, point(1280, 1400), point(1280, 1500), 960..1600, false),
+            Some(held)
+        );
+    }
+
+    #[test]
+    fn consumed_hold_resets_after_leaving_either_side_or_the_dock_span() {
+        for y in [1438, 1439, 1440, 1441] {
+            assert!(at_held_edge(UPPER, point(1280, y), &(960..1600)));
+        }
+        for (x, y) in [(1280, 1437), (1280, 1442), (959, 1439), (1600, 1439)] {
+            assert!(!at_held_edge(UPPER, point(x, y), &(960..1600)));
+        }
+    }
+
+    #[test]
+    fn mixed_dpi_uses_physical_span_without_rescaling_monitor_coordinates() {
+        assert_eq!(
+            bottom_edge_hold(&[UPPER, LOWER], point(1599, 1420), point(1599, 1460), 960..1600, false),
+            Some(point(1599, 1439))
+        );
+        let upper_left = RECT {
+            left: -2560,
+            right: 0,
+            top: -1440,
+            bottom: 0,
+        };
+        let lower_left = RECT {
+            left: -2170,
+            right: -250,
+            top: 0,
+            bottom: 1080,
+        };
+        assert_eq!(
+            bottom_edge_hold(
+                &[upper_left, lower_left],
+                point(-1280, -40),
+                point(-1280, 40),
+                -1600..-960,
+                false
+            ),
+            Some(point(-1280, -1))
+        );
     }
 }

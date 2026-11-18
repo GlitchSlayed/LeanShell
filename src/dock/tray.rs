@@ -23,7 +23,7 @@ pub enum Tip {
     Chevron,
     /// An icon in the dock, by its inline position.
     Inline(usize),
-    /// An icon in the flyout, by its index in `shown`.
+    /// An icon in the flyout, by its position there.
     Flyout(usize),
 }
 
@@ -33,9 +33,9 @@ fn wanted(icon: &Icon) -> bool {
     icon.visible() && !(icon.callback == 0 && icon.exes.iter().any(|exe| exe.ends_with(r"\explorer.exe")))
 }
 
-/// Picks the shown icons and the promoted ones for the dock, reusing pixels
-/// for icons that didn't change.
-pub fn update(old: Vec<Shown>, icons: Vec<Icon>, size: i32) -> (Vec<Shown>, Vec<usize>) {
+/// Picks the shown icons, the promoted ones for the dock, and the rest for
+/// the flyout, reusing pixels for icons that didn't change.
+pub fn update(old: Vec<Shown>, icons: Vec<Icon>, size: i32) -> (Vec<Shown>, Vec<usize>, Vec<usize>) {
     let mut cache: HashMap<Key, (u64, Arc<IconPixels>)> = old
         .into_iter()
         .filter_map(|shown| Some((shown.icon.key(), (shown.icon.revision, shown.pixels?))))
@@ -54,14 +54,20 @@ pub fn update(old: Vec<Shown>, icons: Vec<Icon>, size: i32) -> (Vec<Shown>, Vec<
             Shown { icon, pixels }
         })
         .collect();
-    let inline = shown
+    let inline: Vec<usize> = shown
         .iter()
         .enumerate()
         .filter(|(_, shown)| shown.icon.promoted == Some(true) && shown.pixels.is_some())
         .map(|(index, _)| index)
         .take(logic::MAX_INLINE)
         .collect();
-    (shown, inline)
+    let hidden = hidden_indices(shown.len(), &inline);
+    (shown, inline, hidden)
+}
+
+/// Indices into `shown` that stay in the flyout instead of the dock row.
+fn hidden_indices(count: usize, inline: &[usize]) -> Vec<usize> {
+    (0..count).filter(|index| !inline.contains(index)).collect()
 }
 
 /// The largest size an icon is drawn at before resampling. Tray icons are
@@ -278,6 +284,13 @@ mod tests {
 
     fn pixels(width: u32, height: u32, bgra: Vec<u8>) -> IconPixels {
         IconPixels { width, height, bgra }
+    }
+
+    #[test]
+    fn hidden_indices_exclude_the_dock_row() {
+        assert_eq!(hidden_indices(5, &[1, 3]), [0, 2, 4]);
+        assert_eq!(hidden_indices(3, &[0, 1, 2]), []);
+        assert_eq!(hidden_indices(2, &[]), [0, 1]);
     }
 
     #[test]

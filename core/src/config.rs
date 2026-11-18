@@ -127,6 +127,13 @@ pub struct Config {
     pub hide_taskbar: bool,
     pub dock: bool,
     pub dock_autohide: bool,
+    #[serde(default = "default_true")]
+    pub dock_search_button: bool,
+    #[serde(default = "default_dock_screen")]
+    pub dock_screen: String,
+    /// `#RRGGBB` or `#RRGGBBAA`, or empty for the theme's colors.
+    #[serde(default)]
+    pub dock_color: String,
     pub dock_icon_size: usize,
     pub hotkey: String,
     pub max_results: usize,
@@ -163,6 +170,19 @@ fn default_true() -> bool {
     true
 }
 
+fn default_dock_screen() -> String {
+    "pointer".to_string()
+}
+
+/// Returns true if `value` is empty (meaning use theme colors) or a valid `#RRGGBB` / `#RRGGBBAA` hex color.
+pub fn is_valid_color(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return true;
+    }
+    matches!(value.strip_prefix('#'), Some(hex) if matches!(hex.len(), 6 | 8) && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self::parse(DEFAULT_CONFIG).expect("valid default config")
@@ -176,8 +196,15 @@ impl Config {
     }
 
     /// Creates the default config on first run if not found. Returns defaults and an error
-    /// if the file cannot be read or parsed.
+    /// if the file cannot be read or parsed, or a warning if an unusable color fell back.
     pub fn load_from_path(path: &Path) -> (Config, Option<String>) {
+        Self::read_from_path(path).unwrap_or_else(|error| (Config::default(), Some(error)))
+    }
+
+    /// Reads the config, creating the default one on first run. `Err` means
+    /// the file cannot be read or parsed. A warning comes with a config that
+    /// is usable, where one value fell back to its default.
+    pub fn read_from_path(path: &Path) -> Result<(Config, Option<String>), String> {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -185,16 +212,27 @@ impl Config {
                 DEFAULT_CONFIG.to_string()
             }
             // Preserve unreadable files, including locked files and invalid UTF-8.
-            Err(e) => return (Config::default(), Some(format!("{}: {e}", path.display()))),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
         };
-        match Self::parse(&text) {
-            Ok(mut config) => {
-                config.max_results = config.max_results.clamp(1, 20);
-                config.dock_icon_size = config.dock_icon_size.clamp(24, 40);
-                (config, None)
-            }
-            Err(e) => (Config::default(), Some(format!("{}: {}", path.display(), e.message()))),
+        let mut config = Self::parse(&text).map_err(|e| format!("{}: {}", path.display(), e.message()))?;
+        config.max_results = config.max_results.clamp(1, 20);
+        config.dock_icon_size = config.dock_icon_size.clamp(24, 40);
+        let warning = config.drop_unusable_color();
+        Ok((config, warning))
+    }
+
+    /// Clears a `dock_color` that is not a color, which returns the dock to
+    /// the theme's colors, and says what was wrong with it.
+    pub fn drop_unusable_color(&mut self) -> Option<String> {
+        if self.dock_color.trim().is_empty() || is_valid_color(&self.dock_color) {
+            return None;
         }
+        let warning = format!(
+            "config.toml: dock_color \"{}\" must look like #1E3A8A or #1E3A8AC0. Using the theme's colors.",
+            self.dock_color
+        );
+        self.dock_color.clear();
+        Some(warning)
     }
 
     /// Reads a config, taking each missing key from `config-0.3.toml` or the
@@ -202,7 +240,13 @@ impl Config {
     pub fn parse(text: &str) -> Result<Config, toml::de::Error> {
         let mut table: toml::Table = toml::from_str(DEFAULT_CONFIG)?;
         table.extend(toml::from_str::<toml::Table>(MISSING_KEYS)?);
-        table.extend(toml::from_str::<toml::Table>(text)?);
+        let user: toml::Table = toml::from_str(text)?;
+        let has_claim_win_key = user.contains_key("claim_win_key");
+        let win_key_value = user.get("win_key").cloned();
+        table.extend(user);
+        if !has_claim_win_key && let Some(v) = win_key_value {
+            table.insert("claim_win_key".into(), v);
+        }
         table.try_into()
     }
 }
@@ -295,5 +339,27 @@ mod tests {
 
         let default = Config::default();
         assert_eq!(default.panel_align, PanelAlign::Center);
+    }
+
+    #[test]
+    fn win_key_alias_and_new_dock_keys_deserialize() {
+        let default = Config::default();
+        assert!(default.dock_search_button);
+        assert_eq!(default.dock_screen, "pointer");
+        assert!(default.dock_color.is_empty());
+
+        let config = Config::parse(
+            "win_key = false\ndock_search_button = false\ndock_screen = 'main'\ndock_color = '#1E3A8AC0'",
+        )
+        .unwrap();
+        assert!(!config.claim_win_key);
+        assert!(!config.dock_search_button);
+        assert_eq!(config.dock_screen, "main");
+        assert_eq!(config.dock_color, "#1E3A8AC0");
+
+        let mut bad = Config::parse("dock_color = 'not-a-color'\ndock_search_button = false").unwrap();
+        assert!(bad.drop_unusable_color().is_some());
+        assert!(bad.dock_color.is_empty());
+        assert!(!bad.dock_search_button);
     }
 }

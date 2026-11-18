@@ -84,6 +84,7 @@ pub struct FlyoutFrame<'a> {
     pub dpi: u32,
     pub palette: &'a Palette,
     pub tray: &'a [Shown],
+    pub hidden: &'a [usize],
     pub hover: Option<usize>,
 }
 
@@ -525,13 +526,14 @@ fn tray_icon(target: &mut Target, dpi: u32, shown: &Shown, x: f32, y: f32) -> Re
 
 fn draw_flyout(target: &mut Target, frame: &FlyoutFrame) -> Result<()> {
     background(target, frame.palette, 1.0);
+    let shown: Vec<_> = frame.hidden.iter().filter_map(|&index| frame.tray.get(index)).collect();
     target
         .tray
-        .retain(|key, _| frame.tray.iter().any(|shown| shown.icon.key() == *key));
+        .retain(|key, _| shown.iter().any(|shown| shown.icon.key() == *key));
     let scale = frame.dpi as f32 / 96.0;
     let snap = |dip: f32| (dip * scale).round() / scale;
     let cell = logic::FLYOUT_CELL;
-    for (index, shown) in frame.tray.iter().enumerate() {
+    for (index, shown) in shown.iter().enumerate() {
         let (left, top) = logic::flyout_cell(index);
         if frame.hover == Some(index) {
             unsafe {
@@ -595,14 +597,13 @@ unsafe fn draw(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
             separator(
                 target,
                 frame,
-                frame.layout.offset_x(frame.layout_scale)
-                    + logic::left_scaled(frame.layout.pinned + 1, frame.layout_scale)
-                    + logic::separator_width(frame.layout_scale) / 2.0,
+                frame.layout.left(frame.layout.pinned + 1, frame.layout_scale)
+                    - logic::separator_width(frame.layout_scale) / 2.0,
             );
         }
         let foreground = GetForegroundWindow().0 as isize;
         target.bitmaps.retain(|key, _| icons.contains_key(key));
-        for index in 0..=running {
+        for index in frame.layout.first_slot()..=running {
             let pos = frame.layout.left(index, frame.layout_scale);
             let slot = logic::slot(frame.layout_scale);
             let item = index.checked_sub(1).and_then(|i| items.get(i + scroll));
@@ -626,7 +627,7 @@ unsafe fn draw(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
                 );
             }
             let progress = frame.hover_levels.get(index).copied().unwrap_or(0.0);
-            let lift = 2.0 * progress * progress * (3.0 - 2.0 * progress);
+            let lift = 2.0 * crate::ease::smoothstep(progress);
             let icon_size = *app_icon_size;
             let icon_rect = if frame.layout.vertical {
                 let icon_left = ICON_CENTER_Y * frame.layout_scale - icon_size / 2.0 - lift * frame.layout_scale;

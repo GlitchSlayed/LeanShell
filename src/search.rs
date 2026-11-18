@@ -343,33 +343,36 @@ impl Searcher {
         let mut scored: Vec<_> = apps
             .iter()
             .filter_map(|app| {
-                let name_match = self.names.score(&pattern, &app.name);
-                let (score, highlights) = if let Some(m) = name_match {
-                    m
-                } else {
-                    let alt_id = app
-                        .path
-                        .as_deref()
-                        .and_then(|p| p.rsplit(['\\', '/']).next())
-                        .or_else(|| {
-                            let after_dot = app.id.rsplit('.').next().unwrap_or(&app.id);
-                            let before_bang = after_dot.split('!').next().unwrap_or(after_dot);
-                            let before_hash = before_bang.split('_').next().unwrap_or(before_bang);
-                            Some(before_hash)
-                        });
-                    let (alt_score, _) = alt_id.and_then(|alt| self.names.score(&pattern, alt))?;
-                    (alt_score.saturating_sub(10), Vec::new())
-                };
-                let prefix = if app.name.to_lowercase().starts_with(&lower) {
-                    40
-                } else {
-                    0
-                };
-                Some((score + prefix + history.boost(&app.id, now), app, highlights))
+                let name = app.name.to_lowercase();
+                let mut best = self.names.score(&pattern, &app.name).map(|(score, highlights)| {
+                    (
+                        name == lower,
+                        score + if name.starts_with(&lower) { 40 } else { 0 },
+                        highlights,
+                    )
+                });
+                // Aliases are literal prefixes only: no fuzzy path/extension matches.
+                for alias in &app.aliases {
+                    if !alias.starts_with(&lower) {
+                        continue;
+                    }
+                    if let Some((score, _)) = self.names.score(&pattern, alias) {
+                        let candidate = (alias == &lower, score + 40, Vec::new());
+                        if best.as_ref().is_none_or(|b| (candidate.0, candidate.1) > (b.0, b.1)) {
+                            best = Some(candidate);
+                        }
+                    }
+                }
+                let (exact, score, highlights) = best?;
+                Some((exact, score + history.boost(&app.id, now), app, highlights))
             })
             .collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.len().cmp(&b.1.name.len())));
-        for (_, app, highlights) in scored.into_iter().take(MAX_APP_RESULTS) {
+        scored.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then(b.1.cmp(&a.1))
+                .then(a.2.name.len().cmp(&b.2.name.len()))
+        });
+        for (_, _, app, highlights) in scored.into_iter().take(MAX_APP_RESULTS) {
             results.push(app_result(app, highlights));
         }
 
@@ -488,12 +491,51 @@ fn url_encode(s: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn file_names_allow_one_mid_word_match_per_word() {
+        let mut matcher = NameMatcher::new();
+        let pattern = Pattern::parse("2024 report", CaseMatching::Ignore, Normalization::Smart);
+        assert!(matcher.score(&pattern, "Q32024_bugreporting.pdf").is_none());
+        assert!(matcher.score_words(&pattern, "Q32024_bugreporting.pdf", 2).is_some());
+        let scattered = Pattern::parse("rpt", CaseMatching::Ignore, Normalization::Smart);
+        assert!(matcher.score_words(&scattered, "bugreporting.pdf", 1).is_none());
+    }
+
     fn app(name: &str) -> AppEntry {
         AppEntry {
+            aliases: Vec::new(),
             name: name.into(),
             id: name.into(),
             path: None,
         }
+    }
+
+    #[test]
+    fn ranks_literal_aliases_without_path_or_extension_noise() {
+        let mut cmd = app("Ukazni Poziv");
+        cmd.aliases = vec!["cmd".into()];
+        let mut task = app("Upravitelj opravil");
+        task.aliases = vec!["taskmgr".into()];
+        let mut calc = app("Racunalo");
+        calc.aliases = vec!["calc".into()];
+        let apps = [app("cmd helper"), cmd, task, calc];
+        let mut searcher = Searcher::new();
+        let mut titles = |query: &str| -> Vec<String> {
+            searcher
+                .search(query, &apps, &History::default(), &Config::default())
+                .into_iter()
+                .filter(|r| r.kind == Kind::App)
+                .map(|r| r.title)
+                .collect()
+        };
+        assert_eq!(titles("CMD")[0], "Ukazni Poziv");
+        assert_eq!(titles("task"), ["Upravitelj opravil"]);
+        assert_eq!(titles("mgr"), Vec::<String>::new());
+        assert_eq!(titles("exe"), Vec::<String>::new());
+        assert_eq!(titles("system32"), Vec::<String>::new());
+        assert!(!titles("c").contains(&"Upravitelj opravil".into()));
+        let results = searcher.search("cmd", &apps, &History::default(), &Config::default());
+        assert!(results[0].highlights.is_empty());
     }
 
     #[test]
@@ -616,11 +658,13 @@ mod tests {
         let apps = [
             AppEntry {
                 name: "Command Prompt".into(),
+                aliases: vec!["cmd".into()],
                 id: r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\cmd.exe".into(),
                 path: Some(r"C:\WINDOWS\system32\cmd.exe".into()),
             },
             AppEntry {
                 name: "Calculator".into(),
+                aliases: vec!["calc".into(), "windowscalculator".into()],
                 id: "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".into(),
                 path: None,
             },
@@ -629,7 +673,7 @@ mod tests {
         let (h, c) = (History::default(), Config::default());
         let res = searcher.search("cmd", &apps, &h, &c);
         assert!(res.iter().any(|r| r.title == "Command Prompt"));
-        let res = searcher.search("WindowsCalculator", &apps, &h, &c);
+        let res = searcher.search("calc", &apps, &h, &c);
         assert!(res.iter().any(|r| r.title == "Calculator"));
     }
 }

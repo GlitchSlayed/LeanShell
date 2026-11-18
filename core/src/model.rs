@@ -8,6 +8,9 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppEntry {
     pub name: String,
+    /// Lowercase program names, computed once by the indexer.
+    #[serde(default)]
+    pub aliases: Vec<String>,
     /// Windows shell parsing name in `shell:AppsFolder`: a path or an AppUserModelID.
     pub id: String,
     /// File path for desktop apps, if resolvable.

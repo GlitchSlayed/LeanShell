@@ -47,6 +47,21 @@ dock = true
 # false, the dock stays on the main screen and windows stop above it while the
 # taskbar is hidden.
 dock_autohide = true
+
+# The screen the dock shows on: "pointer", "main", or a screen ID. A chosen
+# screen that isn't connected falls back to the main screen.
+dock_screen = "pointer"
+
+# Show the search button at the start of the dock. With false it disappears and
+# the launcher opens with the hotkey only.
+dock_search_button = true
+
+# The color of the dock and the launcher, as "#RRGGBB", or "#RRGGBBAA" where
+# AA (00 to FF) sets how strongly the color covers the theme's acrylic. Mica
+# and solid show it at full strength. Text turns light or dark to stay
+# readable, and follows the theme below 40% strength. Empty uses the theme's
+# colors.
+dock_color = ""
 # App window list shown when hovering a running app icon:
 # "multiple" (only when the app has multiple windows), "always", or "off".
 window_list = "multiple"

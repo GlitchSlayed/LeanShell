@@ -4,12 +4,14 @@
 //! and gives the space back when the app bar is removed or Wisp exits.
 
 use std::cell::Cell;
+use std::os::windows::io::AsRawHandle;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{E_FAIL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{E_FAIL, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
+    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint, MonitorFromRect,
 };
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -22,15 +24,19 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Error, HRESULT, Result, w};
 
 /// Windows sends app bar notifications with this message.
-const WM_APPBAR: u32 = WM_APP + 40;
+use crate::messages::WM_APPBAR;
 /// Asks the space's thread to check the space is still kept.
-const WM_CHECK: u32 = WM_APP + 41;
+use crate::messages::WM_CHECK;
 /// Updates the reserved height as the dock's icon size changes.
-const WM_SET_HEIGHT: u32 = WM_APP + 42;
+use crate::messages::WM_SET_HEIGHT;
 /// Windows sends no message when it works the work area out again without
 /// the space, so the space's thread also checks on a timer.
 const CHECK_TIMER: usize = 1;
 const CHECK_MS: u32 = 1000;
+
+/// How long quitting waits for the space to be given back. Explorer answers
+/// within its own 5 s limit, so this only ends a wait that went wrong.
+const CLOSE_WAIT: Duration = Duration::from_secs(5);
 
 pub fn edge_to_win32(edge: leanshell_core::config::PanelEdge) -> u32 {
     match edge {
@@ -118,10 +124,26 @@ impl DockSpace {
     }
 
     /// Gives the space back and waits until Windows has, as before exiting.
+    ///
+    /// Removing the app bar makes Explorer tell every window about the new
+    /// work area and wait for each, the caller's too. So this answers sent
+    /// messages while it waits: a plain join kept Explorer, and with it the
+    /// space's thread, waiting until Explorer gave up on the caller.
     pub fn close(mut self) {
         self.stop();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        let Some(thread) = self.thread.take() else { return };
+        let handle = [HANDLE(thread.as_raw_handle())];
+        let deadline = Instant::now() + CLOSE_WAIT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now()).as_millis() as u32;
+            let wait = unsafe { MsgWaitForMultipleObjectsEx(Some(&handle), left, QS_SENDMESSAGE, MWMO_INPUTAVAILABLE) };
+            if wait.0 != WAIT_OBJECT_0.0 + 1 {
+                break;
+            }
+            unsafe {
+                let mut msg = MSG::default();
+                let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+            }
         }
     }
 
@@ -222,11 +244,11 @@ fn check(hwnd: HWND) {
     }
 }
 
-/// Whether the primary work area stops above the strip. Another app bar
-/// below the strip is fine.
+/// Whether the screen's work area stops past the strip. Another app bar
+/// behind the strip is fine.
 fn kept() -> bool {
     let strip = STRIP.get();
-    primary().is_none_or(|(_, work, _)| match EDGE.get() {
+    screen().is_none_or(|(_, work, _)| match EDGE.get() {
         ABE_TOP => work.top >= strip.bottom,
         ABE_LEFT => work.left >= strip.right,
         ABE_RIGHT => work.right <= strip.left,
@@ -259,7 +281,7 @@ fn unregister(hwnd: HWND) {
 
     // In exclusive shell mode, restore full monitor work area
     if crate::tray_host::explorer_tray().is_none()
-        && let Some((monitor, _, _)) = primary()
+        && let Some((monitor, _, _)) = screen()
     {
         let mut work = monitor;
         unsafe {
@@ -352,11 +374,14 @@ fn send(message: u32, data: &mut APPBARDATA) -> usize {
     result
 }
 
-/// The primary screen's bounds and work area, and its thickness for the space in
-/// physical pixels.
-fn primary() -> Option<(RECT, RECT, i32)> {
+/// The dock's screen's bounds and work area, and its thickness for the space in
+/// physical pixels. The main screen unless the user chose another.
+fn screen() -> Option<(RECT, RECT, i32)> {
     unsafe {
-        let monitor: HMONITOR = MonitorFromPoint(POINT::default(), MONITOR_DEFAULTTOPRIMARY);
+        let monitor: HMONITOR = match crate::dock::fixed_screen() {
+            Some(bounds) => MonitorFromRect(&bounds, MONITOR_DEFAULTTOPRIMARY),
+            None => MonitorFromPoint(POINT::default(), MONITOR_DEFAULTTOPRIMARY),
+        };
         let mut info = MONITORINFO {
             cbSize: size_of::<MONITORINFO>() as u32,
             ..Default::default()
@@ -375,10 +400,10 @@ fn primary() -> Option<(RECT, RECT, i32)> {
     }
 }
 
-/// Claims a strip at the designated edge of the primary screen, above any app bar
+/// Claims a strip at the designated edge of the dock's screen, above any app bar
 /// already there, at the screen's current scale.
 fn place(hwnd: HWND) {
-    let Some((monitor, _, thickness)) = primary() else {
+    let Some((monitor, _, thickness)) = screen() else {
         return;
     };
     let mut data = bar(hwnd);
@@ -427,7 +452,7 @@ fn place(hwnd: HWND) {
 /// Places the strip again only if the screen or strip thickness changed, so a
 /// broadcast caused by the strip itself does not repeat forever.
 fn place_if_changed(hwnd: HWND) {
-    let Some((monitor, _, thickness)) = primary() else {
+    let Some((monitor, _, thickness)) = screen() else {
         return;
     };
     if PLACED_FOR.get() != (monitor, thickness) {
@@ -443,6 +468,7 @@ unsafe extern "system" fn space_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
             LRESULT(0)
         }
         WM_CHECK => {
+            place_if_changed(hwnd);
             check(hwnd);
             LRESULT(0)
         }
@@ -452,6 +478,7 @@ unsafe extern "system" fn space_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == CHECK_TIMER => {
+            place_if_changed(hwnd);
             check(hwnd);
             LRESULT(0)
         }
