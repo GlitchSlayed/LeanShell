@@ -465,9 +465,8 @@ impl Dock {
         crate::commands::audio::notify_level_changes(hwnd, WM_DOCK_STATUS);
         arm_clock(hwnd);
         for (first, last) in [
-            (EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE),
+            (EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE),
             (EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE),
-            (EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE),
             (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
             // Windows on other desktops are cloaked, so switching desktops changes the apps.
             (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
@@ -526,6 +525,9 @@ impl Dock {
         let mut s = self.state.borrow_mut();
         if s.display_mode != mode {
             s.display_mode = mode;
+            s.close_flyout();
+            s.hide_tip();
+            s.hide_windows();
             s.place();
             unsafe {
                 let _ = InvalidateRect(Some(s.hwnd), None, false);
@@ -537,6 +539,9 @@ impl Dock {
         let mut s = self.state.borrow_mut();
         if s.panel_edge != edge {
             s.panel_edge = edge;
+            s.close_flyout();
+            s.hide_tip();
+            s.hide_windows();
             s.place();
             unsafe {
                 let _ = InvalidateRect(Some(s.hwnd), None, false);
@@ -548,6 +553,10 @@ impl Dock {
         let mut s = self.state.borrow_mut();
         if s.panel_align != align {
             s.panel_align = align;
+            s.close_flyout();
+            s.hide_tip();
+            s.hide_windows();
+            s.place();
             unsafe {
                 let _ = InvalidateRect(Some(s.hwnd), None, false);
             }
@@ -572,13 +581,17 @@ impl Dock {
     }
 
     pub fn animating(&self) -> bool {
-        self.state.borrow().slide.is_some()
+        let s = self.state.borrow();
+        s.slide.is_some() || s.hover_tick.is_some()
     }
 
     pub fn frame(&mut self) {
         let mut s = self.state.borrow_mut();
         if s.slide.is_some() {
             s.step_slide();
+        }
+        if s.hover_tick.is_some() {
+            s.step_hover();
         }
     }
 
@@ -1024,7 +1037,6 @@ impl State {
         {
             self.hide_windows();
         }
-        self.status = status::read();
         self.place();
         if self.suspended {
             return;
@@ -1098,6 +1110,14 @@ impl State {
         self.display_mode == DisplayMode::Panel && self.panel_edge.is_vertical()
     }
 
+    fn effective_edge(&self) -> PanelEdge {
+        if self.display_mode == DisplayMode::Panel {
+            self.panel_edge
+        } else {
+            PanelEdge::Bottom
+        }
+    }
+
     fn app_layout(&self) -> logic::AppLayout {
         let is_vert = self.is_effective_vertical();
         let panel_width = if self.display_mode == DisplayMode::Panel {
@@ -1161,14 +1181,15 @@ impl State {
             self.last_cursor = cursor;
             // On a chosen screen, other screens' edges don't count.
             let monitor = cursor_monitor(cursor).filter(|m| self.fixed.is_none_or(|fixed| fixed == *m));
-            let at_edge = monitor.is_some_and(|m| match self.panel_edge {
+            let edge = self.effective_edge();
+            let at_edge = monitor.is_some_and(|m| match edge {
                 PanelEdge::Top => cursor.y <= m.top + 2,
                 PanelEdge::Bottom => cursor.y >= m.bottom - 2,
                 PanelEdge::Left => cursor.x <= m.left + 2,
                 PanelEdge::Right => cursor.x >= m.right - 2,
             });
             self.reveal_at = None;
-            let near_edge = monitor.is_some_and(|m| match self.panel_edge {
+            let near_edge = monitor.is_some_and(|m| match edge {
                 PanelEdge::Top => cursor.y <= m.top + (m.bottom - m.top) / 3,
                 PanelEdge::Bottom => cursor.y >= m.bottom - (m.bottom - m.top) / 3,
                 PanelEdge::Left => cursor.x <= m.left + (m.right - m.left) / 3,
@@ -1247,7 +1268,10 @@ impl State {
             || self.held
             || self.flyout_open
             || over_windows
-            || cursor.x >= rect.left - slack && cursor.x < rect.right + slack && cursor.y >= rect.top - slack;
+            || (cursor.x >= rect.left - slack
+                && cursor.x < rect.right + slack
+                && cursor.y >= rect.top - slack
+                && cursor.y < rect.bottom + slack);
         if near {
             self.away = 0;
         } else {
@@ -1416,6 +1440,7 @@ impl State {
             self.slide_to = 1.0;
         }
         self.start_slide(0.0);
+        self.update_status();
         self.refresh();
     }
 
@@ -1466,6 +1491,13 @@ impl State {
         let mut rect = RECT::default();
         unsafe {
             let _ = GetWindowRect(self.hwnd, &mut rect);
+            if self
+                .slide
+                .is_some_and(|start| start.elapsed().as_secs_f32() * 1000.0 / crate::util::perf::slowdown() >= SLIDE_MS)
+            {
+                self.slide = None;
+                let _ = KillTimer(Some(self.hwnd), SLIDE_TIMER);
+            }
             let offset = self.slide_offset(rect.bottom - rect.top);
             let _ = SetWindowPos(
                 self.hwnd,
@@ -1476,16 +1508,11 @@ impl State {
                 0,
                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
-            self.publish_rects();
-            if self
-                .slide
-                .is_some_and(|start| start.elapsed().as_secs_f32() * 1000.0 / crate::util::perf::slowdown() >= SLIDE_MS)
-            {
-                self.slide = None;
-                let _ = KillTimer(Some(self.hwnd), SLIDE_TIMER);
+            if self.slide.is_none() {
                 if !self.revealed {
                     let _ = ShowWindow(self.hwnd, SW_HIDE);
                 }
+                self.publish_rects();
             }
         }
         if crate::util::perf::hook_on("WISP_FRAME_TIMING") {
@@ -1500,8 +1527,11 @@ impl State {
         if self.hover_tick.is_none() {
             self.hover_tick = Some(Instant::now());
         }
-        unsafe {
-            SetTimer(Some(self.hwnd), HOVER_TIMER, 10, None);
+        if !self.frame_paced {
+            // SAFETY: Arms HOVER_TIMER when hover animation is not paced by the launcher frame loop.
+            unsafe {
+                SetTimer(Some(self.hwnd), HOVER_TIMER, 10, None);
+            }
         }
     }
 
@@ -1521,7 +1551,9 @@ impl State {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
             if !moving {
                 self.hover_tick = None;
-                let _ = KillTimer(Some(self.hwnd), HOVER_TIMER);
+                if !self.frame_paced {
+                    let _ = KillTimer(Some(self.hwnd), HOVER_TIMER);
+                }
             }
         }
     }
@@ -1591,12 +1623,13 @@ impl State {
             let size = logic::icon_pixels(self.dpi, self.app_icon_size);
             self.artwork.drain();
             for item in &self.items {
-                let path = item
-                    .app
-                    .path
-                    .clone()
-                    .unwrap_or_else(|| format!("shell:AppsFolder\\{}", item.app.id));
-                if let Some(pixels) = self.artwork.request(self.hwnd, &item.app.id, &path, size) {
+                if let Some(pixels) = self
+                    .artwork
+                    .request(self.hwnd, &item.app.id, item.app.path.as_deref(), size)
+                {
+                    if self.icons.len() >= 4096 {
+                        self.icons.clear();
+                    }
                     self.icons.insert(item.app.id.clone(), pixels);
                 }
             }
@@ -1918,7 +1951,7 @@ impl State {
         let monitor = info.rcMonitor;
         let layout_scale = logic::layout_scale(self.app_icon_size);
         let dock_h = (logic::height(layout_scale) * scale).round() as i32;
-        let (x, y) = match self.panel_edge {
+        let (x, y) = match self.effective_edge() {
             PanelEdge::Top => (
                 ((chevron.left + chevron.right - width) / 2)
                     .min(monitor.right - margin - width)
@@ -2160,7 +2193,8 @@ impl State {
         }
         let anchor = self.item_rect(slot);
         let gap = (6.0 * scale).round() as i32;
-        let available = match self.panel_edge {
+        let edge = self.effective_edge();
+        let available = match edge {
             PanelEdge::Top => info.rcWork.bottom - gap - (anchor.bottom + gap),
             PanelEdge::Bottom => anchor.top - gap - (info.rcWork.top + gap),
             PanelEdge::Left | PanelEdge::Right => (info.rcWork.bottom - info.rcWork.top) - 2 * gap,
@@ -2184,7 +2218,7 @@ impl State {
             return;
         };
         let (width, height) = ((width * scale).ceil() as i32, (height * scale).ceil() as i32);
-        let (x, y) = match self.panel_edge {
+        let (x, y) = match edge {
             PanelEdge::Top => (
                 ((anchor.left + anchor.right - width) / 2)
                     .min(info.rcWork.right - gap - width)
@@ -2289,7 +2323,7 @@ impl State {
             let _ = GetMonitorInfoW(MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST), &mut info);
         }
         let gap = (6.0 * scale).round() as i32;
-        let (x, y) = match self.panel_edge {
+        let (x, y) = match self.effective_edge() {
             PanelEdge::Top => (
                 ((anchor.left + anchor.right - width) / 2)
                     .min(info.rcMonitor.right - gap - width)
@@ -2451,27 +2485,61 @@ impl State {
         self.show_desktops(desktops);
     }
 
-    /// Shows the desktops in a pill above the dock for a moment.
+    /// Shows the desktops in a pill adjacent to the dock or panel for a moment.
     fn show_desktops(&mut self, desktops: desktops::Desktops) {
         self.hide_windows();
         self.tip_target = None;
-        let name = &desktops.names[desktops.current];
+        let Some(name) = desktops.names.get(desktops.current) else {
+            return;
+        };
         let Ok((width, height)) = self.tip_renderer.measure_desktops(desktops.names.len(), name) else {
             return;
         };
         let scale = self.dpi as f32 / 96.0;
         let (width, height) = ((width * scale).ceil() as i32, (height * scale).ceil() as i32);
         let gap = (6.0 * scale).round() as i32;
+        let edge = self.effective_edge();
         self.desktop_pill = Some(desktops);
         unsafe {
             let _ = KillTimer(Some(self.hwnd), TIP_TIMER);
             let mut dock = RECT::default();
             let _ = GetWindowRect(self.hwnd, &mut dock);
+            let mut info = MONITORINFO {
+                cbSize: size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            let _ = GetMonitorInfoW(MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST), &mut info);
+            let (x, y) = match edge {
+                PanelEdge::Top => (
+                    ((dock.left + dock.right - width) / 2)
+                        .min(info.rcMonitor.right - gap - width)
+                        .max(info.rcMonitor.left + gap),
+                    dock.bottom + gap,
+                ),
+                PanelEdge::Bottom => (
+                    ((dock.left + dock.right - width) / 2)
+                        .min(info.rcMonitor.right - gap - width)
+                        .max(info.rcMonitor.left + gap),
+                    dock.top - gap - height,
+                ),
+                PanelEdge::Left => (
+                    dock.right + gap,
+                    ((dock.top + dock.bottom - height) / 2)
+                        .min(info.rcMonitor.bottom - gap - height)
+                        .max(info.rcMonitor.top + gap),
+                ),
+                PanelEdge::Right => (
+                    dock.left - gap - width,
+                    ((dock.top + dock.bottom - height) / 2)
+                        .min(info.rcMonitor.bottom - gap - height)
+                        .max(info.rcMonitor.top + gap),
+                ),
+            };
             let _ = SetWindowPos(
                 self.tip,
                 Some(HWND_TOPMOST),
-                (dock.left + dock.right - width) / 2,
-                dock.top - gap - height,
+                x,
+                y,
                 width,
                 height,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
@@ -2867,8 +2935,7 @@ unsafe extern "system" fn window_event(
     }
     if !matches!(
         event,
-        EVENT_OBJECT_CREATE
-            | EVENT_OBJECT_DESTROY
+        EVENT_OBJECT_DESTROY
             | EVENT_OBJECT_SHOW
             | EVENT_OBJECT_HIDE
             | EVENT_OBJECT_NAMECHANGE

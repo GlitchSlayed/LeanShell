@@ -19,7 +19,7 @@ pub struct Artwork {
     posted: Arc<AtomicBool>,
 }
 impl Artwork {
-    pub fn request(&mut self, hwnd: HWND, id: &str, path: &str, size: i32) -> Option<Arc<IconPixels>> {
+    pub fn request(&mut self, hwnd: HWND, id: &str, path: Option<&str>, size: i32) -> Option<Arc<IconPixels>> {
         let key = (id.to_owned(), size);
         if let Some(pixels) = self.cache.get(&key) {
             return pixels.clone();
@@ -63,8 +63,13 @@ impl Artwork {
             }
             self.worker = Some((send, receive));
         }
-        let send = &self.worker.as_ref().unwrap().0;
-        if send.send((key.clone(), path.to_owned())).is_ok() {
+        let Some((send, _)) = &self.worker else {
+            return None;
+        };
+        let target_path = path
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("shell:AppsFolder\\{id}"));
+        if send.send((key.clone(), target_path)).is_ok() {
             self.pending.insert(key);
         } else {
             self.cache.insert(key, None);
@@ -95,7 +100,7 @@ mod tests {
         artwork.cache.insert(("app".into(), 32), None);
         assert!(artwork.cache.contains_key(&("app".into(), 32)));
         assert!(!artwork.cache.contains_key(&("app".into(), 48)));
-        assert!(artwork.request(HWND::default(), "app", "missing", 32).is_none());
+        assert!(artwork.request(HWND::default(), "app", Some("missing"), 32).is_none());
         assert!(artwork.worker.is_none());
     }
 }

@@ -5,6 +5,7 @@
 
 use std::cell::Cell;
 use std::os::windows::io::AsRawHandle;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -47,6 +48,14 @@ pub fn edge_to_win32(edge: leanshell_core::config::PanelEdge) -> u32 {
     }
 }
 
+/// Active Win32 AppBar edge (`ABE_LEFT..=ABE_BOTTOM`), readable across threads.
+static ACTIVE_EDGE: AtomicU32 = AtomicU32::new(ABE_BOTTOM);
+
+/// Returns the active dock/panel Win32 edge (`ABE_*`).
+pub fn active_edge() -> u32 {
+    ACTIVE_EDGE.load(Ordering::Acquire)
+}
+
 thread_local! {
     /// The space's thickness in DIPs, for the window procedure.
     static THICKNESS: Cell<f32> = const { Cell::new(0.0) };
@@ -84,11 +93,14 @@ impl DockSpace {
             .spawn(move || run(thickness, edge, ready))
             .map_err(|e| Error::new(E_FAIL, e.to_string()))?;
         match started.recv() {
-            Ok(Ok(hwnd)) => Ok(Self {
-                hwnd: HWND(hwnd as _),
-                edge,
-                thread: Some(thread),
-            }),
+            Ok(Ok(hwnd)) => {
+                ACTIVE_EDGE.store(edge, Ordering::Release);
+                Ok(Self {
+                    hwnd: HWND(hwnd as _),
+                    edge,
+                    thread: Some(thread),
+                })
+            }
             Ok(Err(code)) => {
                 let _ = thread.join();
                 Err(Error::from_hresult(code))
@@ -166,6 +178,7 @@ impl Drop for DockSpace {
 fn run(thickness: f32, edge: u32, ready: mpsc::Sender<std::result::Result<usize, HRESULT>>) {
     THICKNESS.set(thickness);
     EDGE.set(edge);
+    ACTIVE_EDGE.store(edge, Ordering::Release);
     let hwnd = match create() {
         Ok(hwnd) => hwnd,
         Err(e) => {

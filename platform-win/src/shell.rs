@@ -31,8 +31,12 @@ pub fn get_registered_shell() -> Option<String> {
             Some(&mut size),
         );
         if res.is_ok() {
-            let units = (size as usize / 2).saturating_sub(1);
-            Some(String::from_utf16_lossy(&buffer[..units]))
+            let units = (size as usize / 2).min(buffer.len());
+            Some(
+                String::from_utf16_lossy(&buffer[..units])
+                    .trim_end_matches('\0')
+                    .to_string(),
+            )
         } else {
             None
         }
@@ -55,8 +59,12 @@ pub fn get_backup_shell() -> Option<String> {
             Some(&mut size),
         );
         if res.is_ok() {
-            let units = (size as usize / 2).saturating_sub(1);
-            Some(String::from_utf16_lossy(&buffer[..units]))
+            let units = (size as usize / 2).min(buffer.len());
+            Some(
+                String::from_utf16_lossy(&buffer[..units])
+                    .trim_end_matches('\0')
+                    .to_string(),
+            )
         } else {
             None
         }
@@ -168,8 +176,12 @@ pub fn unregister_exclusive_shell() -> Result<()> {
         )
         .is_ok()
         {
-            let units = (size as usize / 2).saturating_sub(1);
-            Some(buffer[..units].iter().copied().chain(Some(0)).collect())
+            let units = (size as usize / 2).min(buffer.len());
+            let trimmed = match buffer[..units].iter().position(|&c| c == 0) {
+                Some(end) => &buffer[..end],
+                None => &buffer[..units],
+            };
+            Some(trimmed.iter().copied().chain(Some(0)).collect())
         } else {
             None
         }

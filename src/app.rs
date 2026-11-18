@@ -728,7 +728,12 @@ impl Launcher {
                 .as_ref()
                 .map_or(dock::DEFAULT_RESERVED_HEIGHT, Dock::reserved_height)
         });
-        let edge = crate::dock::space::edge_to_win32(self.config.panel_edge);
+        let effective_edge = if is_panel {
+            self.config.panel_edge
+        } else {
+            PanelEdge::Bottom
+        };
+        let edge = crate::dock::space::edge_to_win32(effective_edge);
         // Before the space exists, so a re-hide while Windows places it
         // cannot take the edge back.
         if wanted && let Some(hider) = &mut self.taskbar {
@@ -887,18 +892,22 @@ impl Launcher {
             self.last_scan = Instant::now();
         }
         // Selecting the previous query lets the user replace it by typing.
-        let should_morph =
-            self.unified() && (self.morph.is_some() || self.dock.as_ref().is_some_and(Dock::mostly_visible));
-        self.morphed = should_morph;
         let from = if self.unified() {
             let rect = self.outline.unwrap_or_else(|| self.current_rect());
-            let suspended = self.dock.as_mut().unwrap().suspend();
-            should_morph.then_some(if self.morph.is_some() || self.visible {
+            let mut dock_morph = false;
+            let mut suspended = rect;
+            if let Some(dock) = &mut self.dock {
+                dock_morph = self.morph.is_some() || dock.mostly_visible();
+                suspended = dock.suspend();
+            }
+            self.morphed = dock_morph;
+            dock_morph.then_some(if self.morph.is_some() || self.visible {
                 rect
             } else {
                 suspended
             })
         } else {
+            self.morphed = false;
             None
         };
         let opacity = self.morph_opacity();
@@ -984,8 +993,12 @@ impl Launcher {
         self.trim_file_icons();
         self.visible = false;
         self.radios.close();
-        if self.morphed && self.unified() && !self.taskbar.as_ref().is_some_and(TaskbarHider::is_peeking) {
-            let to = self.dock.as_ref().unwrap().resting_rect();
+        if self.morphed
+            && self.unified()
+            && !self.taskbar.as_ref().is_some_and(TaskbarHider::is_peeking)
+            && let Some(dock) = &self.dock
+        {
+            let to = dock.resting_rect();
             self.begin_morph(self.outline.unwrap_or_else(|| self.current_rect()), to, false, opacity);
             self.set_collapsed_style(true);
             unsafe {
@@ -1132,8 +1145,12 @@ impl Launcher {
             }
             return;
         }
-        if self.unified() && self.visible && self.outline.is_some_and(|r| r != target) {
-            self.begin_morph(self.outline.unwrap(), target, true, 1.0);
+        if self.unified()
+            && self.visible
+            && let Some(outline) = self.outline
+            && outline != target
+        {
+            self.begin_morph(outline, target, true, 1.0);
         } else {
             self.set_bounds(target);
             self.outline = Some(target);
@@ -1259,7 +1276,9 @@ impl Launcher {
             self.config.backdrop,
             config::dock_tint(&self.config),
         );
-        self.morph.as_mut().unwrap().start = Instant::now();
+        if let Some(morph) = &mut self.morph {
+            morph.start = Instant::now();
+        }
         self.outline = Some(from);
         self.set_bounds(from);
     }
@@ -1294,7 +1313,9 @@ impl Launcher {
             self.apply_theme();
             if !opening {
                 self.outline = None;
-                self.set_bounds(self.dock.as_ref().unwrap().resting_rect());
+                if let Some(resting) = self.dock.as_ref().map(Dock::resting_rect) {
+                    self.set_bounds(resting);
+                }
                 if let Some(dock) = &mut self.dock {
                     dock.resume();
                 }

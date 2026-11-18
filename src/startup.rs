@@ -19,7 +19,7 @@
 //! so it does not interfere with other users' sessions or other Windows installations.
 
 use std::path::PathBuf;
-use windows::Win32::Foundation::LUID;
+use windows::Win32::Foundation::{ERROR_NO_MORE_ITEMS, LUID};
 use windows::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_STATISTICS, TokenStatistics};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
@@ -173,7 +173,7 @@ fn launch_registry_run_keys(root: HKEY, subkey: PCWSTR, is_runonce: bool) {
             let mut data = [0u16; 1024]; // Properly aligned 16-bit buffer
             let mut data_len = (data.len() * 2) as u32;
 
-            if RegEnumValueW(
+            let enum_err = RegEnumValueW(
                 key,
                 index,
                 Some(PWSTR(value_name.as_mut_ptr())),
@@ -182,10 +182,13 @@ fn launch_registry_run_keys(root: HKEY, subkey: PCWSTR, is_runonce: bool) {
                 Some(&mut value_type),
                 Some(data.as_mut_ptr().cast()),
                 Some(&mut data_len),
-            )
-            .is_err()
-            {
+            );
+            if enum_err == ERROR_NO_MORE_ITEMS {
                 break;
+            }
+            if enum_err.is_err() {
+                index += 1;
+                continue;
             }
 
             if value_type == REG_SZ.0 || value_type == REG_EXPAND_SZ.0 {

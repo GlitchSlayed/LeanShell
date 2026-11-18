@@ -192,17 +192,24 @@ impl Renderer {
 
     pub fn draw_on(&mut self, rt: &ID2D1HwndRenderTarget, frame: &Frame) -> Result<()> {
         self.update_formats(frame.layout_scale)?;
-        if self.shared_target.as_ref().is_none_or(|t| t.rt != *rt) {
-            self.shared_target = Some(Target {
-                rt: rt.clone(),
-                brush: unsafe { rt.CreateSolidColorBrush(&frame.palette.text, None)? },
-                bitmaps: HashMap::new(),
-                tray: HashMap::new(),
-                size: D2D_SIZE_U::default(),
-            });
+        let target = match self.shared_target.as_mut().filter(|t| t.rt == *rt) {
+            Some(_) => self.shared_target.as_mut(),
+            None => {
+                self.shared_target = Some(Target {
+                    rt: rt.clone(),
+                    brush: unsafe { rt.CreateSolidColorBrush(&frame.palette.text, None)? },
+                    bitmaps: HashMap::new(),
+                    tray: HashMap::new(),
+                    size: D2D_SIZE_U::default(),
+                });
+                self.shared_target.as_mut()
+            }
+        };
+        if let Some(target) = target {
+            unsafe { draw(target, &self.formats, frame) }.and_then(|()| draw_status(target, &self.formats, frame))
+        } else {
+            Ok(())
         }
-        let target = self.shared_target.as_mut().unwrap();
-        unsafe { draw(target, &self.formats, frame) }.and_then(|()| draw_status(target, &self.formats, frame))
     }
 
     fn update_formats(&mut self, scale: f32) -> Result<()> {
@@ -384,32 +391,34 @@ impl Renderer {
                 width: client.right.max(1) as u32,
                 height: client.bottom.max(1) as u32,
             };
-            if self.target.is_none() {
-                let rt = self.factory.CreateHwndRenderTarget(
-                    &D2D1_RENDER_TARGET_PROPERTIES {
-                        r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-                        pixelFormat: D2D1_PIXEL_FORMAT {
-                            format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            let target = match self.target.as_mut() {
+                Some(target) => target,
+                None => {
+                    let rt = self.factory.CreateHwndRenderTarget(
+                        &D2D1_RENDER_TARGET_PROPERTIES {
+                            r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+                            pixelFormat: D2D1_PIXEL_FORMAT {
+                                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                            },
+                            ..Default::default()
                         },
-                        ..Default::default()
-                    },
-                    &D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                        hwnd,
-                        pixelSize: size,
-                        presentOptions: D2D1_PRESENT_OPTIONS_IMMEDIATELY,
-                    },
-                )?;
-                rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-                self.target = Some(Target {
-                    brush: rt.CreateSolidColorBrush(&palette.text, None)?,
-                    rt,
-                    bitmaps: HashMap::new(),
-                    tray: HashMap::new(),
-                    size,
-                });
-            }
-            let target = self.target.as_mut().unwrap();
+                        &D2D1_HWND_RENDER_TARGET_PROPERTIES {
+                            hwnd,
+                            pixelSize: size,
+                            presentOptions: D2D1_PRESENT_OPTIONS_IMMEDIATELY,
+                        },
+                    )?;
+                    rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+                    self.target.insert(Target {
+                        brush: rt.CreateSolidColorBrush(&palette.text, None)?,
+                        rt,
+                        bitmaps: HashMap::new(),
+                        tray: HashMap::new(),
+                        size,
+                    })
+                }
+            };
             if target.size.width != size.width || target.size.height != size.height {
                 target.rt.Resize(&size)?;
                 target.size = size;
@@ -652,14 +661,12 @@ unsafe fn draw(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
                 text(&target.rt, &target.brush, &formats.search, "\u{E721}", icon_rect);
                 continue;
             };
-            let fallback = item
-                .app
-                .path
-                .as_ref()
-                .map(|path| format!("exe:{}", path.to_lowercase()));
-            let icon = icons
-                .get_key_value(&item.app.id)
-                .or_else(|| fallback.as_ref().and_then(|key| icons.get_key_value(key)));
+            let icon = icons.get_key_value(&item.app.id).or_else(|| {
+                item.app
+                    .path
+                    .as_ref()
+                    .and_then(|path| icons.get_key_value(&format!("exe:{}", path.to_lowercase())))
+            });
             if let Some((key, pixels)) = icon {
                 let stale = target.bitmaps.get(key).is_none_or(|(old, _)| !Arc::ptr_eq(old, pixels));
                 if stale {
@@ -692,8 +699,15 @@ unsafe fn draw(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
                 target.brush.SetColor(&p.tile);
                 target.rt.FillRoundedRectangle(&rounded(icon_rect, 6.0), &target.brush);
                 target.brush.SetColor(&p.text);
-                let initial = item.app.name.chars().next().unwrap_or('?').to_uppercase().to_string();
-                text(&target.rt, &target.brush, &formats.letter, &initial, icon_rect);
+                let mut buf = [0u8; 16];
+                let mut len = 0;
+                for c in item.app.name.chars().next().unwrap_or('?').to_uppercase() {
+                    if len + c.len_utf8() <= buf.len() {
+                        len += c.encode_utf8(&mut buf[len..]).len();
+                    }
+                }
+                let initial = std::str::from_utf8(&buf[..len]).unwrap_or("?");
+                text(&target.rt, &target.brush, &formats.letter, initial, icon_rect);
             }
             if !item.windows.is_empty() {
                 // A dot for running apps, a longer accent dash for the foreground one, and
@@ -739,19 +753,46 @@ fn text(
     rt: &ID2D1HwndRenderTarget,
     brush: &ID2D1SolidColorBrush,
     format: &IDWriteTextFormat,
-    text: &str,
+    value: &str,
     area: D2D_RECT_F,
 ) {
-    let text: Vec<u16> = text.encode_utf16().collect();
-    unsafe {
-        rt.DrawText(
-            &text,
-            format,
-            &area,
-            brush,
-            D2D1_DRAW_TEXT_OPTIONS_NONE,
-            DWRITE_MEASURING_MODE_NATURAL,
-        );
+    let mut stack = [0u16; 64];
+    let mut len = 0;
+    let mut overflow = false;
+    for unit in value.encode_utf16() {
+        if len < stack.len() {
+            stack[len] = unit;
+            len += 1;
+        } else {
+            overflow = true;
+            break;
+        }
+    }
+    if !overflow {
+        // SAFETY: `stack[..len]` contains the UTF-16 encoding of `value`.
+        unsafe {
+            rt.DrawText(
+                &stack[..len],
+                format,
+                &area,
+                brush,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                DWRITE_MEASURING_MODE_NATURAL,
+            );
+        }
+    } else {
+        let wide: Vec<u16> = value.encode_utf16().collect();
+        // SAFETY: `wide` contains the UTF-16 encoding of `value`.
+        unsafe {
+            rt.DrawText(
+                &wide,
+                format,
+                &area,
+                brush,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                DWRITE_MEASURING_MODE_NATURAL,
+            );
+        }
     }
 }
 
@@ -767,9 +808,17 @@ fn volume_glyph(percent: u32, muted: bool) -> &'static str {
 }
 
 /// Segoe Fluent Icons battery in tenths, from Battery0 (U+EBA0) or BatteryCharging0 (U+EBAB).
-fn battery_glyph(percent: u32, charging: bool) -> String {
-    let first = if charging { 0xEBAB } else { 0xEBA0 };
-    char::from_u32(first + (percent.min(100) + 5) / 10).map_or_else(String::new, String::from)
+fn battery_glyph(percent: u32, charging: bool) -> &'static str {
+    const DISCHARGING: [&str; 11] = [
+        "\u{EBA0}", "\u{EBA1}", "\u{EBA2}", "\u{EBA3}", "\u{EBA4}", "\u{EBA5}", "\u{EBA6}", "\u{EBA7}", "\u{EBA8}",
+        "\u{EBA9}", "\u{EBAA}",
+    ];
+    const CHARGING: [&str; 11] = [
+        "\u{EBAB}", "\u{EBAC}", "\u{EBAD}", "\u{EBAE}", "\u{EBAF}", "\u{EBB0}", "\u{EBB1}", "\u{EBB2}", "\u{EBB3}",
+        "\u{EBB4}", "\u{EBB5}",
+    ];
+    let step = ((percent.min(100) + 5) / 10) as usize;
+    if charging { CHARGING[step] } else { DISCHARGING[step] }
 }
 
 /// A separator, then the volume, battery and clock, each with a second line.
@@ -895,7 +944,7 @@ fn draw_status(target: &mut Target, formats: &Formats, frame: &Frame) -> Result<
                         rt,
                         brush,
                         &formats.glyph,
-                        &battery_glyph(level.percent, level.charging),
+                        battery_glyph(level.percent, level.charging),
                         upper,
                     );
                     brush.SetColor(&p.subtext);

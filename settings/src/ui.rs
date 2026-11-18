@@ -56,10 +56,13 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
     window.set_hide_taskbar(config.hide_taskbar);
     window.set_dock_enabled(config.dock);
     window.set_dock_autohide(config.dock_autohide);
+    window.set_dock_search_button(config.dock_search_button);
+    window.set_dock_screen(config.dock_screen.into());
     window.set_dock_icon_size(config.dock_icon_size as i32);
     window.set_window_list(config.window_list.into());
     window.set_theme_setting(config.theme.into());
     window.set_backdrop_setting(config.backdrop.into());
+    window.set_dock_color(config.dock_color.into());
     window.set_position_setting(config.position.into());
     window.set_backend_setting(config.backend.into());
     window.set_slint_renderer_setting(config.slint_renderer.into());
@@ -67,6 +70,7 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
     window.set_show_recent(config.show_recent);
     window.set_search_url(config.search_url.into());
     window.set_file_search(config.file_search);
+    window.set_file_search_everything(config.file_search_everything);
 
     let autostart = crate::system::autostart_enabled();
     window.set_autostart(autostart);
@@ -238,6 +242,14 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
     {
         let store = Arc::clone(&store);
         let weak = window.as_weak();
+        window.on_dock_enabled_changed(move |val| {
+            apply_setting(&store, &weak, "dock", val.into(), |w, v| w.set_dock_enabled(v), val);
+        });
+    }
+
+    {
+        let store = Arc::clone(&store);
+        let weak = window.as_weak();
         window.on_dock_autohide_changed(move |val| {
             apply_setting(
                 &store,
@@ -245,6 +257,36 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
                 "dock_autohide",
                 val.into(),
                 |w, v| w.set_dock_autohide(v),
+                val,
+            );
+        });
+    }
+
+    {
+        let store = Arc::clone(&store);
+        let weak = window.as_weak();
+        window.on_dock_search_button_changed(move |val| {
+            apply_setting(
+                &store,
+                &weak,
+                "dock_search_button",
+                val.into(),
+                |w, v| w.set_dock_search_button(v),
+                val,
+            );
+        });
+    }
+
+    {
+        let store = Arc::clone(&store);
+        let weak = window.as_weak();
+        window.on_dock_screen_changed(move |val| {
+            apply_setting(
+                &store,
+                &weak,
+                "dock_screen",
+                val.as_str().into(),
+                |w, v| w.set_dock_screen(v),
                 val,
             );
         });
@@ -349,6 +391,30 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
                 |w, v| w.set_backdrop_setting(v),
                 val,
             );
+        });
+    }
+
+    {
+        let store = Arc::clone(&store);
+        let weak = window.as_weak();
+        window.on_dock_color_changed(move |val| {
+            let Some(s) = store.as_ref() else {
+                return;
+            };
+            match s.set("dock_color", val.as_str().into()) {
+                Ok(_) => {
+                    crate::system::notify_launcher();
+                    if let Some(w) = weak.upgrade() {
+                        w.set_dock_color(val);
+                        w.set_status_message("".into());
+                    }
+                }
+                Err(e) => {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_status_message(format!("Invalid color: {e}").into());
+                    }
+                }
+            }
         });
     }
 
@@ -461,6 +527,21 @@ pub fn run(welcome: bool, page: Option<&str>) -> Result<(), Box<dyn std::error::
                 "file_search",
                 val.into(),
                 |w, v| w.set_file_search(v),
+                val,
+            );
+        });
+    }
+
+    {
+        let store = Arc::clone(&store);
+        let weak = window.as_weak();
+        window.on_file_search_everything_changed(move |val| {
+            apply_setting(
+                &store,
+                &weak,
+                "file_search_everything",
+                val.into(),
+                |w, v| w.set_file_search_everything(v),
                 val,
             );
         });

@@ -2,6 +2,26 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.12 - 2026-11-17
+
+### Audit, Bugfixes & Performance Optimizations
+
+- **Panel Mode & AppBar Edge Consistency**:
+  - Added `State::effective_edge()` (`src/dock.rs`) so floating Dock mode always anchors edge detection, flyout placement, window list placement, tooltips, and virtual desktop pills to `Bottom` regardless of leftover `panel_edge`, while Panel mode anchors to `Top`/`Bottom`/`Left`/`Right` consistently.
+  - Added vertical upper-edge bound (`cursor.y < rect.bottom + slack`) to `State::poll()`'s hover hold box so auto-hide docks hide properly when the cursor moves downward onto a lower stacked monitor.
+  - Closed open popups and re-ran layout immediately in `Dock::{set_display_mode, set_panel_edge, set_panel_align}` and guarded `State::show_desktops()` bounds.
+  - Updated `Launcher::sync_reserve()` (`src/app.rs`), `dock::space::active_edge()` (`src/dock/space.rs`), and `TaskbarHider::reapply()` (`src/taskbar.rs`) so non-bottom panels reserve and preserve the configured monitor and edge cleanly across threads.
+- **Win32 Hook Filtering & Desktop Wallpaper Caching**:
+  - Removed noisy `EVENT_OBJECT_LOCATIONCHANGE` and `EVENT_OBJECT_CREATE` subscriptions from `src/dock.rs` (`Dock::create`, `window_event`) and narrowed `platform-win/src/window_hook.rs` to `(EVENT_OBJECT_DESTROY..=EVENT_OBJECT_HIDE)` + `EVENT_OBJECT_NAMECHANGE` (avoiding `EVENT_OBJECT_FOCUS` / location wakeups).
+  - Cached active wallpaper path and pixel dimensions in `src/desktop.rs`, balanced `CoInitializeEx`/`CoUninitialize` in `load_wallpaper_bitmap()`, and ignored unrelated `WM_SETTINGCHANGE` broadcasts (such as `SPI_SETWORKAREA`).
+  - Hardened `src/startup.rs` (`ERROR_NO_MORE_ITEMS` termination vs skipping single oversized Run entries) and clamped UTF-16 buffer slices safely in `platform-win/src/shell.rs`.
+- **Hot-Path Rendering, Artwork, & Safety Cleanups**:
+  - Frame-paced dock hover animations alongside slide animations (`Dock::{animating, frame}`), settled `State::step_slide()` cleanly before positioning, and deferred `publish_rects()` to slide completion.
+  - Removed synchronous COM/battery `status::read()` calls from `State::refresh()`, refreshing status on reveal/events instead.
+  - Eliminated per-place `shell:AppsFolder\` string formatting when artwork is cached (`Artwork::request`), bounded `State::icons` to 4096 entries, switched `battery_glyph()` to static string slices, used a `[u16; 64]` stack buffer in `dock::render::text()`, avoided eager fallback initial and `exe:` heap allocations in `dock::render::draw()`, and replaced `.unwrap()` calls in `src/app.rs`, `src/dock/artwork.rs`, and `src/dock/render.rs`.
+- **Settings UI Parity** (`settings/ui/settings.slint`, `settings/src/ui.rs`):
+  - Exposed and wired controls for `dock` (`Show Dock`), `dock_search_button`, `dock_screen`, `dock_color` (with inline validation error reporting), and `file_search_everything`, and aligned the default Slint `shell_mode` property to `"exclusive"`.
+
 ## 0.0.11 - 2026-11-17
 
 ### Upstream Wisp Sync (`v0.7.0`–`v0.8.1+`)

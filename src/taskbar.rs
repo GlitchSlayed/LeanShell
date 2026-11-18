@@ -786,15 +786,31 @@ impl TaskbarHider {
         let primary_bounds = Rect::from(
             monitor_info(unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) })?.rcMonitor,
         );
+        let dock_bounds = crate::dock::fixed_screen().map(Rect::from).unwrap_or(primary_bounds);
+        let dock_edge = crate::dock::space::active_edge();
         for monitor in monitors()? {
             let mut target = monitor.work;
             for bar in current.iter().filter(|bar| bar.monitor == monitor.bounds) {
                 let reclaimed = state::reclaimed_work(monitor.bounds, target, bar.rect);
-                // The dock's app bar owns the bottom; reclaiming would erase it.
-                if self.keep_bottom && monitor.bounds == primary_bounds {
-                    target = Rect {
-                        bottom: target.bottom,
-                        ..reclaimed
+                // The dock/panel app bar owns its configured edge; reclaiming that side would erase it.
+                if self.keep_bottom && monitor.bounds == dock_bounds {
+                    target = match dock_edge {
+                        ABE_TOP => Rect {
+                            top: target.top,
+                            ..reclaimed
+                        },
+                        ABE_LEFT => Rect {
+                            left: target.left,
+                            ..reclaimed
+                        },
+                        ABE_RIGHT => Rect {
+                            right: target.right,
+                            ..reclaimed
+                        },
+                        _ => Rect {
+                            bottom: target.bottom,
+                            ..reclaimed
+                        },
                     };
                 } else {
                     target = reclaimed;

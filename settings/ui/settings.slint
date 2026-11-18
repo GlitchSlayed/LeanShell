@@ -19,12 +19,14 @@ export component SettingsWindow inherits Window {
     in_out property <string> display_mode: "dock"; // "dock", "panel", "center"
     in_out property <string> panel_edge: "bottom"; // "bottom", "top", "left", "right"
     in_out property <string> panel_align: "center"; // "center", "left"
-    in_out property <string> shell_mode: "companion"; // "companion", "exclusive"
+    in_out property <string> shell_mode: "exclusive";
     in_out property <bool> watchdog: true;
     in_out property <bool> claim_win_key: true;
     in_out property <bool> hide_taskbar: true;
     in_out property <bool> dock_enabled: true;
     in_out property <bool> dock_autohide: true;
+    in_out property <bool> dock_search_button: true;
+    in_out property <string> dock_screen: "pointer";
     in_out property <int> dock_icon_size: 32;
     in_out property <string> window_list: "multiple"; // "multiple", "always", "off"
     in_out property <bool> autostart: false;
@@ -33,6 +35,7 @@ export component SettingsWindow inherits Window {
     // Appearance Settings
     in_out property <string> theme_setting: "system"; // "system", "dark", "light"
     in_out property <string> backdrop_setting: "acrylic"; // "acrylic", "mica", "solid"
+    in_out property <string> dock_color: "";
     in_out property <string> position_setting: "bottom"; // "bottom", "center"
     in_out property <string> backend_setting: "direct2d"; // "direct2d", "slint"
     in_out property <string> slint_renderer_setting: "skia"; // "skia", "vello", "software"
@@ -42,6 +45,7 @@ export component SettingsWindow inherits Window {
     in_out property <bool> show_recent: true;
     in_out property <string> search_url: "https://www.google.com/search?q={query}";
     in_out property <bool> file_search: true;
+    in_out property <bool> file_search_everything: true;
     in_out property <string> new_exclude_folder: "";
 
     // About & Update
@@ -62,12 +66,15 @@ export component SettingsWindow inherits Window {
     callback hide_taskbar_changed(bool);
     callback dock_enabled_changed(bool);
     callback dock_autohide_changed(bool);
+    callback dock_search_button_changed(bool);
+    callback dock_screen_changed(string);
     callback dock_icon_size_changed(int);
     callback window_list_changed(string);
     callback autostart_changed(bool);
     callback unpin_all_clicked();
     callback theme_changed(string);
     callback backdrop_changed(string);
+    callback dock_color_changed(string);
     callback position_changed(string);
     callback backend_changed(string);
     callback slint_renderer_changed(string);
@@ -75,6 +82,7 @@ export component SettingsWindow inherits Window {
     callback show_recent_changed(bool);
     callback search_url_changed(string);
     callback file_search_changed(bool);
+    callback file_search_everything_changed(bool);
     callback add_exclude_folder(string);
     callback open_config_clicked();
     callback open_github_clicked();
@@ -518,6 +526,20 @@ export component SettingsWindow inherits Window {
                                 }
                             }
 
+                            // Show Dock
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Show Dock"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Show the dock for running apps, tray icons, volume, and clock"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Switch {
+                                    checked: dock_enabled;
+                                    toggled => { root.dock_enabled_changed(self.checked); }
+                                }
+                            }
+
                             // Keep Dock Visible
                             HorizontalLayout {
                                 alignment: space_between;
@@ -529,6 +551,35 @@ export component SettingsWindow inherits Window {
                                 Switch {
                                     checked: dock_autohide;
                                     toggled => { root.dock_autohide_changed(self.checked); }
+                                }
+                            }
+
+                            // Show Search Button
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Show Search Button"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Include the launcher search button at the start of the dock"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Switch {
+                                    checked: dock_search_button;
+                                    toggled => { root.dock_search_button_changed(self.checked); }
+                                }
+                            }
+
+                            // Dock Screen
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Dock Screen"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Screen target: pointer, main, or a display device path"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                LineEdit {
+                                    width: 170px;
+                                    text: dock_screen;
+                                    accepted(val) => { root.dock_screen_changed(val); }
                                 }
                             }
 
@@ -685,6 +736,21 @@ export component SettingsWindow inherits Window {
                                 }
                             }
 
+                            // Custom Dock Color
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Custom Dock Color"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Hex #RRGGBB or #RRGGBBAA (empty uses the theme colors)"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                LineEdit {
+                                    width: 170px;
+                                    text: dock_color;
+                                    accepted(val) => { root.dock_color_changed(val); }
+                                }
+                            }
+
                             // Launcher Position
                             HorizontalLayout {
                                 alignment: space_between;
@@ -799,6 +865,20 @@ export component SettingsWindow inherits Window {
                                 Switch {
                                     checked: file_search;
                                     toggled => { root.file_search_changed(self.checked); }
+                                }
+                            }
+
+                            // Use Everything When Running
+                            HorizontalLayout {
+                                alignment: space_between;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    Text { text: "Use Everything When Running"; font_size: 14px; color: #ffffff; }
+                                    Text { text: "Query voidtools Everything for instant all-drive file search"; font_size: 12px; color: #aaaaaa; }
+                                }
+                                Switch {
+                                    checked: file_search_everything;
+                                    toggled => { root.file_search_everything_changed(self.checked); }
                                 }
                             }
 

@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EVENT_OBJECT_CREATE, EVENT_OBJECT_NAMECHANGE, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
-    EVENT_SYSTEM_MINIMIZESTART, PostMessageW, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_NAMECHANGE, EVENT_SYSTEM_FOREGROUND,
+    EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, PostMessageW, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 use windows::core::{Error, Result};
 
@@ -120,21 +120,26 @@ impl WindowHook {
             hooks.push(min_hook);
         }
 
-        // 3. Window creation, destruction, show, hide, and title changes
-        // SAFETY: Registering out-of-context hook for top-level window lifecycle events.
-        let obj_hook = unsafe {
-            SetWinEventHook(
-                EVENT_OBJECT_CREATE,
-                EVENT_OBJECT_NAMECHANGE,
-                None,
-                Some(win_event_proc),
-                0,
-                0,
-                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
-            )
-        };
-        if !obj_hook.is_invalid() {
-            hooks.push(obj_hook);
+        // 3. Narrow window lifecycle and title change hooks (excluding noisy focus/location events)
+        for (event_min, event_max) in [
+            (EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE),
+            (EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE),
+        ] {
+            // SAFETY: Registering out-of-context hook for narrowed top-level window events.
+            let hook = unsafe {
+                SetWinEventHook(
+                    event_min,
+                    event_max,
+                    None,
+                    Some(win_event_proc),
+                    0,
+                    0,
+                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+                )
+            };
+            if !hook.is_invalid() {
+                hooks.push(hook);
+            }
         }
 
         if hooks.is_empty() {

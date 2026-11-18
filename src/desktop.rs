@@ -4,7 +4,7 @@
 //! desktop wallpaper image (or falls back to `PaintDesktop`), and hosts a
 //! right-click desktop menu.
 
-use std::cell::Cell;
+use std::cell::RefCell;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
@@ -22,50 +22,78 @@ const IDM_TERMINAL: usize = 1003;
 const IDM_DISPLAY: usize = 1004;
 const IDM_RESTORE: usize = 1005;
 
-thread_local! {
-    static CACHED_WALLPAPER: Cell<Option<HBITMAP>> = const { Cell::new(None) };
+struct CachedWallpaper {
+    path: String,
+    cx: i32,
+    cy: i32,
+    bitmap: HBITMAP,
 }
 
-fn reload_wallpaper(cx: i32, cy: i32) {
+thread_local! {
+    static CACHED_WALLPAPER: RefCell<Option<CachedWallpaper>> = const { RefCell::new(None) };
+}
+
+fn reload_wallpaper(cx: i32, cy: i32, force: bool) {
+    let cx = cx.max(1);
+    let cy = cy.max(1);
+    let Some(path) = get_wallpaper_path() else {
+        clear_wallpaper();
+        return;
+    };
     CACHED_WALLPAPER.with(|cell| {
-        if let Some(old) = cell.get() {
+        let mut slot = cell.borrow_mut();
+        if !force
+            && let Some(cached) = slot.as_ref()
+            && cached.path == path
+            && cached.cx == cx
+            && cached.cy == cy
+        {
+            return;
+        }
+        if let Some(old) = slot.take() {
             // SAFETY: Deleting old wallpaper bitmap
             unsafe {
-                let _ = DeleteObject(old.into());
+                let _ = DeleteObject(old.bitmap.into());
             }
-            cell.set(None);
         }
-        cell.set(load_wallpaper_bitmap(cx, cy));
+        if let Some(bitmap) = load_wallpaper_bitmap(&path, cx, cy) {
+            *slot = Some(CachedWallpaper { path, cx, cy, bitmap });
+        }
     });
 }
 
 fn clear_wallpaper() {
     CACHED_WALLPAPER.with(|cell| {
-        if let Some(old) = cell.get() {
+        if let Some(old) = cell.borrow_mut().take() {
             // SAFETY: Deleting wallpaper bitmap
             unsafe {
-                let _ = DeleteObject(old.into());
+                let _ = DeleteObject(old.bitmap.into());
             }
-            cell.set(None);
         }
     });
 }
 
-fn load_wallpaper_bitmap(cx: i32, cy: i32) -> Option<HBITMAP> {
-    let path = get_wallpaper_path()?;
-    // SAFETY: Creating IShellItemImageFactory to decode image to HBITMAP
+fn load_wallpaper_bitmap(path: &str, cx: i32, cy: i32) -> Option<HBITMAP> {
+    // SAFETY: Creating IShellItemImageFactory to decode image to HBITMAP with balanced COM init.
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&HSTRING::from(path.as_str()), None).ok()?;
-        factory
-            .GetImage(
-                SIZE {
-                    cx: cx.max(1),
-                    cy: cy.max(1),
-                },
-                SIIGBF_SCALEUP | SIIGBF_RESIZETOFIT,
-            )
+        let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let bitmap = SHCreateItemFromParsingName::<_, _, IShellItemImageFactory>(&HSTRING::from(path), None)
             .ok()
+            .and_then(|factory| {
+                factory
+                    .GetImage(
+                        SIZE {
+                            cx: cx.max(1),
+                            cy: cy.max(1),
+                        },
+                        SIIGBF_SCALEUP | SIIGBF_RESIZETOFIT,
+                    )
+                    .ok()
+            });
+        if com.is_ok() {
+            CoUninitialize();
+        }
+        bitmap
     }
 }
 
@@ -151,7 +179,7 @@ impl DesktopWindow {
             let _ = SetWindowPos(hwnd, Some(HWND_BOTTOM), x, y, cx, cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
 
-        reload_wallpaper(cx, cy);
+        reload_wallpaper(cx, cy, true);
 
         Ok(Self { hwnd })
     }
@@ -183,7 +211,8 @@ unsafe extern "system" fn desktop_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
                 if !hdc.0.is_null() {
                     let mut painted = false;
                     CACHED_WALLPAPER.with(|cell| {
-                        if let Some(bitmap) = cell.get() {
+                        if let Some(cached) = cell.borrow().as_ref() {
+                            let bitmap = cached.bitmap;
                             let mem_dc = CreateCompatibleDC(Some(hdc));
                             if !mem_dc.0.is_null() {
                                 let old = SelectObject(mem_dc, bitmap.into());
@@ -230,15 +259,17 @@ unsafe extern "system" fn desktop_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
                 let cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
                 let cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
                 let _ = SetWindowPos(hwnd, Some(HWND_BOTTOM), x, y, cx, cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-                reload_wallpaper(cx, cy);
+                reload_wallpaper(cx, cy, false);
                 let _ = InvalidateRect(Some(hwnd), None, true);
                 LRESULT(0)
             }
             WM_SETTINGCHANGE => {
-                let cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-                let cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-                reload_wallpaper(cx, cy);
-                let _ = InvalidateRect(Some(hwnd), None, true);
+                if wparam.0 == SPI_SETDESKWALLPAPER.0 as usize || wparam.0 == 0 {
+                    let cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                    let cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                    reload_wallpaper(cx, cy, wparam.0 == SPI_SETDESKWALLPAPER.0 as usize);
+                    let _ = InvalidateRect(Some(hwnd), None, true);
+                }
                 LRESULT(0)
             }
             WM_RBUTTONUP => {
@@ -294,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_load_wallpaper_bitmap() {
-        let bmp = load_wallpaper_bitmap(800, 600);
+        let bmp = get_wallpaper_path().and_then(|path| load_wallpaper_bitmap(&path, 800, 600));
         println!("load_wallpaper_bitmap: {:?}", bmp.is_some());
         if let Some(bmp) = bmp {
             unsafe {
