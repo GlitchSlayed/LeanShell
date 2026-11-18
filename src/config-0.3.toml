@@ -4,7 +4,6 @@
 # file, so they agree on what such a config means.
 position = "center"
 dock = false
-hide_taskbar = false
 shell_mode = "exclusive"
 display_mode = "dock"
 panel_edge = "bottom"

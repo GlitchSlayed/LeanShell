@@ -20,7 +20,7 @@ try {
     $env:APPDATA = Join-Path $output 'data'
     $data = Join-Path $env:APPDATA 'wisp-demo'
     New-Item -ItemType Directory -Force $data | Out-Null
-    'theme="dark"', 'position="bottom"', 'dock=true', 'hide_taskbar=false', 'file_search=false' |
+    'theme="dark"', 'position="bottom"', 'dock=true', 'file_search=false' |
         Set-Content (Join-Path $data 'config.toml')
     $env:WISP_CAPTURE = '1'
     $env:WISP_CAPTURE_DURATION_MS = "$DurationMs"

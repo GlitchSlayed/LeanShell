@@ -9,10 +9,10 @@ use std::cell::RefCell;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::*;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{HSTRING, PCWSTR, Result, w};
+use windows::core::{BOOL, HSTRING, PCWSTR, Result, s, w};
 
 const DESKTOP_CLASS: PCWSTR = w!("LeanShellDesktop");
 
@@ -183,7 +183,32 @@ impl DesktopWindow {
 
         reload_wallpaper(cx, cy, true);
 
-        Ok(Self { hwnd })
+        let desktop = Self { hwnd };
+        desktop.claim_shell_window();
+        Ok(desktop)
+    }
+
+    /// Registers this desktop window via `SetShellWindow` when `GetShellWindow()` is
+    /// vacant so on-demand `explorer.exe` opens folder windows without creating `Shell_TrayWnd`.
+    pub fn claim_shell_window(&self) -> bool {
+        // SAFETY: Checks GetShellWindow() and dynamically resolves SetShellWindow(HWND)
+        // from user32.dll when no shell window is currently registered.
+        unsafe {
+            let current = GetShellWindow();
+            if !current.is_invalid() {
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(current, Some(&mut pid));
+                return pid == std::process::id();
+            }
+            let Ok(user32) = GetModuleHandleW(w!("user32.dll")) else {
+                return false;
+            };
+            let Some(proc) = GetProcAddress(user32, s!("SetShellWindow")) else {
+                return false;
+            };
+            let set_shell_window: unsafe extern "system" fn(HWND) -> BOOL = std::mem::transmute(proc);
+            set_shell_window(self.hwnd).as_bool()
+        }
     }
 
     #[allow(dead_code)]
@@ -313,7 +338,7 @@ unsafe extern "system" fn desktop_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
                             let _ = crate::launch::settings(false);
                         }
                         IDM_EXPLORER => {
-                            let _ = crate::launch::open("explorer.exe");
+                            let _ = crate::launch::file_explorer();
                         }
                         IDM_TERMINAL => {
                             if crate::launch::open("wt.exe").is_err() {

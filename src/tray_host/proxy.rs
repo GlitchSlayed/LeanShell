@@ -22,6 +22,7 @@ use super::{OwnedIcon, Shared, lock};
 pub const PROXY_PROP: PCWSTR = w!("Wisp.TrayProxy");
 const CONTROL_CLASS: PCWSTR = w!("Wisp.TrayHost");
 const TRAY_CLASS: PCWSTR = w!("Shell_TrayWnd");
+const NOTIFY_CLASS: PCWSTR = w!("TrayNotifyWnd");
 pub(super) const WM_OUTRANK: u32 = WM_APP + 1;
 /// Checks Explorer, our FindWindow ordering and icon owners.
 const CHECK_TIMER: usize = 1;
@@ -57,6 +58,7 @@ struct Host {
     instance: HINSTANCE,
     control: HWND,
     proxy: Option<HWND>,
+    notify: Option<HWND>,
     explorer: Option<Explorer>,
     taskbar_created: u32,
     mutex: HANDLE,
@@ -97,9 +99,10 @@ fn setup(shared: Arc<Shared>) -> Result<Host, String> {
             return Err("Another LeanShell already hosts the notification area".into());
         }
         let instance: HINSTANCE = GetModuleHandleW(None).map_err(|e| e.message())?.into();
-        let procs: [(PCWSTR, WNDPROC); 2] = [
+        let procs: [(PCWSTR, WNDPROC); 3] = [
             (CONTROL_CLASS, Some(control_wndproc)),
             (TRAY_CLASS, Some(proxy_wndproc)),
+            (NOTIFY_CLASS, Some(notify_wndproc)),
         ];
         for (name, proc) in procs {
             let class = WNDCLASSEXW {
@@ -138,6 +141,7 @@ fn setup(shared: Arc<Shared>) -> Result<Host, String> {
             instance,
             control,
             proxy: None,
+            notify: None,
             explorer: None,
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
             mutex,
@@ -259,6 +263,21 @@ impl Host {
             )
             .map_err(|e| e.message())?;
             self.proxy = Some(proxy);
+            self.notify = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                NOTIFY_CLASS,
+                PCWSTR::null(),
+                WS_CHILD,
+                0,
+                0,
+                1,
+                1,
+                Some(proxy),
+                None,
+                Some(self.instance),
+                None,
+            )
+            .ok();
             let _ = SetPropW(proxy, PROXY_PROP, Some(HANDLE(1 as _)));
             // Explorer's tray accepts these from lower integrity apps, so ours must too.
             let _ = ChangeWindowMessageFilterEx(proxy, WM_COPYDATA, MSGFLT_ALLOW, None);
@@ -298,9 +317,33 @@ impl Host {
         }
     }
 
+    /// Releases handles to an exited Explorer instance while keeping our
+    /// standalone `Shell_TrayWnd` proxy alive and preserving collected icons.
+    fn release_explorer(&mut self) {
+        EXPLORER.with(|e| e.set(0));
+        if let Some(explorer) = self.explorer.take() {
+            // SAFETY: Closes duplicate process synchronization handle on Explorer exit.
+            unsafe {
+                let _ = CloseHandle(explorer.process);
+            }
+        }
+        self.waiting = 0;
+        self.outranked = 0;
+        if self.proxy.is_some() {
+            let _ = self.outrank();
+            refresh_icons();
+        }
+    }
+
     /// Removes the proxy, so apps reach Explorer directly, and forgets the icons.
     fn detach(&mut self) {
         EXPLORER.with(|e| e.set(0));
+        if let Some(notify) = self.notify.take() {
+            // SAFETY: Child TrayNotifyWnd owned by proxy thread.
+            unsafe {
+                let _ = DestroyWindow(notify);
+            }
+        }
         if let Some(proxy) = self.proxy.take() {
             unsafe {
                 let _ = RemovePropW(proxy, PROXY_PROP);
@@ -333,9 +376,8 @@ impl Host {
 
     fn signaled(&mut self, handle: HANDLE) {
         if self.explorer.as_ref().is_some_and(|e| e.process == handle) {
-            // Leave before a new Explorer starts, so it never meets our window.
-            eprintln!("Tray host: Explorer exited");
-            self.detach();
+            eprintln!("Tray host: Explorer exited, continuing as standalone Shell_TrayWnd host");
+            self.release_explorer();
         } else if handle == self.settings_event {
             unsafe {
                 SetTimer(Some(self.control), SETTINGS_TIMER, 500, None);
@@ -347,15 +389,20 @@ impl Host {
     /// Explorer restarted, or someone else asked apps to re-add their icons.
     fn taskbar_created(&mut self) {
         let current = explorer_tray();
-        if let (Some(explorer), Some((tray, _))) = (&self.explorer, current)
-            && explorer.tray == tray
-        {
-            // Our own refresh, or another tool's; the icons came through us.
-            return;
-        }
-        self.detach();
-        if current.is_some() {
-            self.reattach();
+        match (&self.explorer, current) {
+            (Some(explorer), Some((tray, _))) if explorer.tray == tray => {
+                // Our own refresh, or another tool's; the icons came through us.
+            }
+            (None, None) => {
+                // Already running standalone (e.g. our own TaskbarCreated broadcast).
+            }
+            (Some(_), None) => {
+                self.release_explorer();
+            }
+            (_, Some(_)) => {
+                self.detach();
+                self.reattach();
+            }
         }
     }
 
@@ -380,8 +427,8 @@ impl Host {
                         && pid == explorer.pid
                 };
                 if !alive {
-                    eprintln!("Tray host: Explorer's taskbar is gone");
-                    self.detach();
+                    eprintln!("Tray host: Explorer's taskbar is gone, keeping standalone Shell_TrayWnd");
+                    self.release_explorer();
                     return;
                 }
                 let found = unsafe { FindWindowW(TRAY_CLASS, None).unwrap_or_default() };
@@ -860,4 +907,9 @@ unsafe extern "system" fn proxy_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
     }
     // Lifecycle, paint and position messages stay with our window.
     forward_other(msg, wp, lp).unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
+}
+
+unsafe extern "system" fn notify_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    // SAFETY: Standard child message handling for standalone TrayNotifyWnd compatibility window.
+    unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
 }

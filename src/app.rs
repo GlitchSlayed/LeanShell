@@ -30,13 +30,14 @@ use crate::history::History;
 use crate::indexer::{AppEntry, IconPixels, IndexEvent, Indexer};
 use crate::messages::{
     WM_APP_COMMANDS, WM_APP_FILES, WM_APP_FRAME, WM_APP_INDEX, WM_APP_QUIT, WM_APP_RELOAD, WM_APP_SHOW, WM_APP_TOGGLE,
-    WM_APP_UPDATE_READY, WM_EXPLORER_REAP_CHECK, WM_FOREGROUND_CHANGED, WM_SHELL_CHORD, WM_WM_ACTION, WM_WM_MOVESIZE,
+    WM_APP_UPDATE_READY, WM_EXPLORER_REAP_CHECK, WM_FOREGROUND_CHANGED, WM_SHELL_CHORD, WM_SHOW_NOW, WM_WM_ACTION,
+    WM_WM_MOVESIZE,
 };
 use crate::render::{Frame, Renderer, SurfaceFrame, layout};
 use crate::search::{self, Action, Drill, FileScope, Kind, ResultItem, Searcher};
 use crate::surface::nav::{self, Direction, Rect};
 use crate::surface::{self, Input, Library, Widget};
-use crate::taskbar::{self, TaskbarHider};
+use crate::taskbar::{self, Outcome, TaskbarWorker, WM_TASKBAR_RESULT};
 use crate::theme::Palette;
 use crate::{hotkey, launch, system, tray, util};
 
@@ -52,12 +53,6 @@ const CARET_TIMER: usize = 1;
 /// Reads the state again while a surface is open, so it stays live.
 const SURFACE_TIMER: usize = 2;
 const SURFACE_REFRESH_MS: u32 = 1000;
-/// Checks whether the user is done with a taskbar shown from the dock.
-const PEEK_TIMER: usize = 3;
-/// Tries again to hide the taskbar after a failure. At sign-in Explorer may
-/// not have finished creating it.
-const TASKBAR_TIMER: usize = 4;
-const TASKBAR_RETRY_MS: u32 = 2000;
 const TASKBAR_ATTEMPTS: u32 = 5;
 /// Debounces on-demand `explorer.exe` reaping after folder windows close.
 const EXPLORER_REAP_TIMER: usize = 5;
@@ -328,6 +323,7 @@ pub fn run() -> Result<()> {
             win_key_hook: None,
             reap_hook: None,
             desktop: None,
+            explorer_nuked: false,
             startup_launched: false,
             hosts_neutered: false,
             wm,
@@ -337,6 +333,7 @@ pub fn run() -> Result<()> {
             previous_foreground: HWND::default(),
             previous_target: None,
             hot_restart: false,
+            full_recovery: false,
             pending_update: None,
             staged_handoff: None,
             update_busy: false,
@@ -511,9 +508,9 @@ struct Launcher {
     /// them would undo changes the launcher already shows.
     commands_sent: u64,
 
-    /// Hides the Windows taskbar while `hide_taskbar` is on.
-    taskbar: Option<TaskbarHider>,
-    /// Failed attempts to hide or restore the taskbar since the config changed.
+    /// Suppresses stray Explorer taskbars and maintains the crash watchdog.
+    taskbar: Option<TaskbarWorker>,
+    /// Failed attempts to configure the taskbar suppressor since startup or reload.
     taskbar_failures: u32,
     /// Room kept for a dock that stays visible.
     dock_space: Option<DockSpace>,
@@ -521,6 +518,7 @@ struct Launcher {
     win_key_hook: Option<leanshell_platform_win::hook::WinKeyHook>,
     reap_hook: Option<leanshell_platform_win::WindowHook>,
     desktop: Option<crate::desktop::DesktopWindow>,
+    explorer_nuked: bool,
     startup_launched: bool,
     hosts_neutered: bool,
     wm: crate::wm::WindowManager,
@@ -530,6 +528,7 @@ struct Launcher {
     previous_foreground: HWND,
     previous_target: Option<commands::open_windows::Target>,
     hot_restart: bool,
+    full_recovery: bool,
     pending_update: Option<crate::update::Release>,
     staged_handoff: Option<(PathBuf, PathBuf)>,
     update_busy: bool,
@@ -571,9 +570,9 @@ struct Scope {
 
 impl Launcher {
     fn start(&mut self) {
+        self.sync_exclusive_shell();
         self.sync_shell();
         self.sync_win_key_hook();
-        self.sync_exclusive_shell();
         self.apply_theme();
         self.set_collapsed_style(true);
         if self.unified() {
@@ -730,10 +729,7 @@ impl Launcher {
     }
 
     fn sync_win_key_hook(&mut self) {
-        let is_exclusive = leanshell_platform_win::is_session_exclusive();
-        leanshell_platform_win::hook::WinKeyHook::set_claim_chords(
-            self.config.claim_shell_chords && (is_exclusive || self.config.hide_taskbar),
-        );
+        leanshell_platform_win::hook::WinKeyHook::set_claim_chords(self.config.claim_shell_chords);
         if self.config.claim_win_key && !crate::util::perf::hook_on("WISP_CAPTURE") {
             if self.win_key_hook.is_none() {
                 match leanshell_platform_win::hook::WinKeyHook::new(self.hwnd) {
@@ -763,11 +759,33 @@ impl Launcher {
     }
 
     fn sync_exclusive_shell(&mut self) {
-        if self.desktop.is_none() {
-            match crate::desktop::DesktopWindow::new() {
+        let capture = crate::util::perf::hook_on("WISP_CAPTURE");
+        if !capture
+            && !leanshell_platform_win::is_exclusive_shell_registered()
+            && let Ok(exe) = std::env::current_exe()
+            && let Err(e) = leanshell_platform_win::register_exclusive_shell(&exe)
+        {
+            eprintln!("Could not register exclusive shell: {e}");
+        }
+        if !capture && !self.explorer_nuked {
+            self.explorer_nuked = true;
+            if leanshell_platform_win::nuke_explorer_shell() {
+                for _ in 0..10 {
+                    if !leanshell_platform_win::is_explorer_running() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+        }
+        match &self.desktop {
+            Some(desktop) => {
+                desktop.claim_shell_window();
+            }
+            None => match crate::desktop::DesktopWindow::new() {
                 Ok(desktop) => self.desktop = Some(desktop),
                 Err(e) => eprintln!("Could not create desktop window: {e}"),
-            }
+            },
         }
         let is_exclusive = leanshell_platform_win::is_session_exclusive();
         if is_exclusive && self.config.neuter_shell_hosts && !self.hosts_neutered {
@@ -777,7 +795,7 @@ impl Launcher {
             }
         }
         self.sync_reap_hook();
-        if !self.startup_launched && is_exclusive {
+        if !capture && !self.startup_launched && is_exclusive {
             self.startup_launched = true;
             crate::startup::launch_logon_startup_apps();
         }
@@ -863,9 +881,9 @@ impl Launcher {
         }
         self.config = config;
         self.taskbar_failures = 0;
+        self.sync_exclusive_shell();
         self.sync_shell();
         self.sync_win_key_hook();
-        self.sync_exclusive_shell();
         self.apply_theme();
         self.wm
             .sync_config(&self.config, self.palette, self.dark, config::dock_tint(&self.config));
@@ -935,7 +953,7 @@ impl Launcher {
     fn sync_reserve(&mut self) {
         let is_panel = self.config.display_mode == DisplayMode::Panel;
         let is_dock = self.config.display_mode == DisplayMode::Dock && self.config.dock;
-        let hidden = self.taskbar.as_ref().is_some_and(TaskbarHider::is_active);
+        let hidden = self.taskbar.as_ref().is_some_and(TaskbarWorker::is_active);
         let is_exclusive = leanshell_platform_win::is_session_exclusive();
         let wanted =
             (hidden || is_exclusive) && (is_panel || (is_dock && self.dock.as_ref().is_some_and(Dock::stays_visible)));
@@ -952,8 +970,8 @@ impl Launcher {
         let edge = crate::dock::space::edge_to_win32(effective_edge);
         // Before the space exists, so a re-hide while Windows places it
         // cannot take the edge back.
-        if wanted && let Some(hider) = &mut self.taskbar {
-            hider.keep_bottom(true);
+        if wanted && let Some(worker) = &self.taskbar {
+            worker.keep_bottom(true);
         }
         if !wanted {
             self.dock_space = None;
@@ -975,90 +993,86 @@ impl Launcher {
                 Err(e) => eprintln!("could not keep space for the panel: {e}"),
             }
         }
-        if let Some(hider) = &mut self.taskbar {
-            hider.keep_bottom(self.dock_space.is_some());
+        if let Some(worker) = &self.taskbar {
+            worker.keep_bottom(self.dock_space.is_some());
         }
     }
 
-    /// Shows the Windows taskbar for a moment, from the dock's chevron menu.
-    fn peek_taskbar(&mut self) {
-        let Some(hider) = &mut self.taskbar else { return };
-        if let Err(e) = hider.peek() {
-            eprintln!("could not show the taskbar: {e}");
-            return;
-        }
-        // The dock would cover the taskbar.
-        if let Some(dock) = &mut self.dock {
-            dock.hide();
-        }
-        unsafe {
-            SetTimer(Some(self.hwnd), PEEK_TIMER, 250, None);
-        }
-    }
-
-    fn peek_tick(&mut self) {
-        let done = match &mut self.taskbar {
-            Some(hider) => hider.peek_tick().unwrap_or_else(|e| {
-                eprintln!("could not hide the taskbar: {e}");
-                true
-            }),
-            None => true,
-        };
-        if done {
-            unsafe {
-                let _ = KillTimer(Some(self.hwnd), PEEK_TIMER);
-            }
-            if let Some(dock) = &mut self.dock
-                && !self.visible
-            {
-                dock.show();
-            }
-        }
-    }
-
-    /// In exclusive shell mode, notification icons are hosted in LeanShell's dock.
+    /// Ensures the taskbar suppressor / crash watchdog worker is active and notification icons live in LeanShell's dock.
     fn sync_taskbar(&mut self) {
-        self.taskbar = None;
+        let watchdog = !crate::util::perf::hook_on("WISP_CAPTURE");
+        if let Err(e) = TaskbarWorker::configure(&mut self.taskbar, self.hwnd, true, watchdog) {
+            self.taskbar_failed(&e);
+        }
         if let Some(dock) = &mut self.dock {
             dock.set_tray(true);
         }
     }
 
-    /// Retries quietly every 2 seconds. Only the last failure is reported, by
-    /// which time the tray icon exists to show the notification.
-    fn taskbar_failed(&mut self, error: &windows::core::Error) {
-        eprintln!("could not change the taskbar: {error}");
-        self.taskbar_failures += 1;
-        if self.taskbar_failures < TASKBAR_ATTEMPTS {
-            unsafe {
-                SetTimer(Some(self.hwnd), TASKBAR_TIMER, TASKBAR_RETRY_MS, None);
-            }
-        } else if self.taskbar_failures == TASKBAR_ATTEMPTS {
-            tray::notify(self.hwnd, "Could not change the taskbar", &error.message(), true);
+    /// Shows the launcher and opens the native `Now` surface (replaces Windows Action Center on clock clicks).
+    fn open_now_surface(&mut self) {
+        if !self.visible {
+            self.show();
+        }
+        if let Some(index) = self
+            .surfaces
+            .specs
+            .iter()
+            .position(|s| s.title.eq_ignore_ascii_case("Now"))
+        {
+            self.open_surface(index);
         }
     }
 
-    /// Hides the taskbar again after Explorer or Windows shows it.
-    fn on_taskbar_message(&mut self, msg: u32) {
-        if let Some(hider) = &mut self.taskbar {
-            match hider.on_message(msg) {
-                // A later failure gets its retries again, but only once the
-                // taskbar is really hidden: a failed restore also lands here.
-                Ok(true) if self.config.hide_taskbar && hider.is_active() => self.taskbar_failures = 0,
-                Ok(_) => {}
-                Err(e) => self.taskbar_failed(&e),
+    fn taskbar_failed(&mut self, error: &windows::core::Error) {
+        eprintln!("could not suppress the taskbar: {error}");
+        self.taskbar_failures += 1;
+        if self.taskbar_failures == TASKBAR_ATTEMPTS {
+            tray::notify(self.hwnd, "Taskbar suppression issue", &error.message(), true);
+        }
+    }
+
+    fn drain_taskbar_results(&mut self) {
+        let outcomes = match &self.taskbar {
+            Some(worker) => worker.drain(),
+            None => return,
+        };
+        for outcome in outcomes {
+            let Outcome::Applied { message, result } = outcome;
+            match result {
+                Ok(changed) => {
+                    if changed && self.taskbar.as_ref().is_some_and(TaskbarWorker::is_active) {
+                        self.taskbar_failures = 0;
+                    }
+                    if message == Some(taskbar::WM_TASKBAR_SHOW)
+                        && let Some(dock) = &self.dock
+                    {
+                        dock.outrank_tray();
+                    }
+                }
+                Err(failure) => {
+                    let error = windows::core::Error::from(&failure);
+                    self.taskbar_failed(&error);
+                }
             }
         }
-        // Explorer restarting or the hider reclaiming space can take the
-        // dock's space away.
         self.sync_reserve();
-        // Re-hide and reclaim space first, since those operations can change
-        // Explorer's z-order. Don't wait for the tray host's periodic check.
-        if msg == taskbar::WM_TASKBAR_SHOW
-            && let Some(dock) = &self.dock
-        {
-            dock.outrank_tray();
+    }
+
+    /// Suppresses or reaps any Explorer taskbar if Windows tries to show one.
+    fn on_taskbar_message(&mut self, msg: u32) {
+        if let Some(worker) = &self.taskbar {
+            worker.on_message(msg);
         }
+        if msg == taskbar::WM_TASKBAR_SHOW {
+            if self.config.auto_reap_explorer && leanshell_platform_win::is_explorer_running() {
+                leanshell_platform_win::reap_idle_explorer(true);
+            }
+            if let Some(dock) = &self.dock {
+                dock.outrank_tray();
+            }
+        }
+        self.sync_reserve();
     }
 
     fn update_dock_apps(&mut self) {
@@ -1212,7 +1226,6 @@ impl Launcher {
         self.radios.close();
         if self.morphed
             && self.unified()
-            && !self.taskbar.as_ref().is_some_and(TaskbarHider::is_peeking)
             && let Some(dock) = &self.dock
         {
             let to = dock.resting_rect();
@@ -1236,9 +1249,7 @@ impl Launcher {
         self.outline = None;
         self.apply_theme();
         self.set_collapsed_style(true);
-        if let Some(dock) = &mut self.dock
-            && !self.taskbar.as_ref().is_some_and(TaskbarHider::is_peeking)
-        {
+        if let Some(dock) = &mut self.dock {
             dock.show();
         }
         if let Some((stage_dir, target_dir)) = self.staged_handoff.take() {
@@ -2810,7 +2821,9 @@ impl Launcher {
         use leanshell_platform_win::ShellChord;
         match chord {
             ShellChord::OpenFiles => {
-                let _ = launch::open("explorer.exe");
+                if let Err(e) = launch::file_explorer() {
+                    eprintln!("Could not open File Explorer: {e}");
+                }
             }
             ShellChord::RunPrompt => self.show_with_query("> "),
             ShellChord::ShowDesktop => {
@@ -2866,19 +2879,19 @@ impl Launcher {
         self.wm.shutdown();
         self.reap_hook = None;
         self.dock = None;
+        self.desktop = None;
         // SAFETY: Clears background timers owned by launcher HWND on teardown.
         unsafe {
             let _ = KillTimer(Some(self.hwnd), EXPLORER_REAP_TIMER);
             let _ = KillTimer(Some(self.hwnd), UPDATE_CHECK_TIMER);
         }
-        if self.hot_restart {
-            TaskbarHider::disarm_for_hot_restart(&mut self.taskbar);
-        } else if let Err(e) = TaskbarHider::configure(&mut self.taskbar, self.hwnd, false, false) {
+        if self.hot_restart || self.full_recovery {
+            TaskbarWorker::disarm_for_hot_restart(&mut self.taskbar);
+        } else if let Some(worker) = self.taskbar.take()
+            && let Err(e) = worker.shutdown()
+        {
             eprintln!("could not restore the taskbar: {e}");
         }
-        // Removed last, so Windows works the work area out again from the
-        // restored taskbar and the remaining app bars. Waits, so the space
-        // is back before Wisp exits.
         if let Some(space) = self.dock_space.take() {
             space.close();
         }
@@ -2887,7 +2900,9 @@ impl Launcher {
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_RECOVERY);
         }
         tray::remove(self.hwnd);
-        if !self.hot_restart {
+        if self.full_recovery {
+            taskbar::full_restore_shell_in_process();
+        } else if !self.hot_restart {
             taskbar::emergency_restore();
         }
     }
@@ -3021,9 +3036,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_NCHITTEST => return LRESULT(HTCLIENT as isize),
         WM_HOTKEY => {
             if wparam.0 == HOTKEY_RECOVERY as usize {
-                eprintln!("Emergency recovery chord triggered: restoring taskbar and shutting down LeanShell.");
+                eprintln!(
+                    "Emergency recovery chord triggered: restoring Windows Explorer shell and shutting down LeanShell."
+                );
+                // SAFETY: WPARAM(2) triggers full recovery rollback of Winlogon\Shell, IFEO hosts, and Explorer.
                 unsafe {
-                    let _ = PostMessageW(Some(hwnd), WM_APP_QUIT, WPARAM(0), LPARAM(0));
+                    let _ = PostMessageW(Some(hwnd), WM_APP_QUIT, WPARAM(2), LPARAM(0));
                 }
             } else {
                 util::perf::input("hotkey_to_content");
@@ -3193,6 +3211,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_APP_QUIT => {
             if wparam.0 == 1 {
                 with_launcher(|l| l.hot_restart = true);
+            } else if wparam.0 == 2 {
+                with_launcher(|l| l.full_recovery = true);
             }
             // SAFETY: Triggers shutdown and clean teardown on WM_APP_QUIT.
             unsafe {
@@ -3433,17 +3453,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             util::perf::input("hotkey_to_content");
             with_launcher(Launcher::toggle);
         }
-        dock::WM_DOCK_SHOW_TASKBAR => {
-            with_launcher(Launcher::peek_taskbar);
+        WM_SHOW_NOW => {
+            with_launcher(Launcher::open_now_surface);
         }
-        WM_TIMER if wparam.0 == PEEK_TIMER => {
-            with_launcher(Launcher::peek_tick);
-        }
-        WM_TIMER if wparam.0 == TASKBAR_TIMER => {
-            unsafe {
-                let _ = KillTimer(Some(hwnd), TASKBAR_TIMER);
-            }
-            with_launcher(Launcher::sync_taskbar);
+        WM_TASKBAR_RESULT => {
+            with_launcher(Launcher::drain_taskbar_results);
         }
         WM_TIMER if wparam.0 == EXPLORER_REAP_TIMER => {
             // SAFETY: Stops the one-shot reaper timer before inspecting Explorer windows.
@@ -3451,7 +3465,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let _ = KillTimer(Some(hwnd), EXPLORER_REAP_TIMER);
             }
             with_launcher(|l| {
-                leanshell_platform_win::reap_idle_explorer(l.config.auto_reap_explorer);
+                if leanshell_platform_win::reap_idle_explorer(l.config.auto_reap_explorer) {
+                    if let Some(desktop) = &l.desktop {
+                        desktop.claim_shell_window();
+                    }
+                    l.sync_reserve();
+                }
             });
         }
         WM_TIMER if wparam.0 == UPDATE_CHECK_TIMER => {
@@ -3463,7 +3482,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             });
         }
-        WM_ENDSESSION if wparam.0 != 0 => taskbar::emergency_restore(),
+        WM_ENDSESSION if wparam.0 != 0 => taskbar::restore_taskbar_state(),
         tray::WM_TRAY => match loword(lparam.0 as usize) {
             WM_LBUTTONUP => {
                 with_launcher(Launcher::show);

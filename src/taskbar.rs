@@ -5,7 +5,7 @@ use std::process::{Child, Command};
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
@@ -18,7 +18,10 @@ use windows::core::{BOOL, Error, HSTRING, Result, w};
 
 #[path = "taskbar/state.rs"]
 mod state;
+#[path = "taskbar/worker.rs"]
+pub mod worker;
 use state::Rect;
+pub use worker::{Outcome, TaskbarWorker, WM_TASKBAR_RESULT};
 
 pub const WM_TASKBAR_SHOW: u32 = WM_APP + 40;
 pub const WM_RECOVERY_DONE: u32 = WM_APP + 41;
@@ -250,11 +253,13 @@ pub fn appbar_state() -> u32 {
 
 fn set_state(state: u32) -> Result<()> {
     // Not FindWindow, which finds the tray proxy first.
-    let hwnd = bars()?
+    let Some(hwnd) = bars()?
         .into_iter()
         .find(|bar| bar.class == "Shell_TrayWnd")
         .map(|bar| HWND(bar.hwnd as _))
-        .ok_or_else(|| failure("Primary taskbar was not found"))?;
+    else {
+        return Ok(());
+    };
     let mut data = APPBARDATA {
         cbSize: size_of::<APPBARDATA>() as u32,
         hWnd: hwnd,
@@ -318,9 +323,14 @@ fn restore_areas(areas: &[(Rect, Rect)]) -> Result<()> {
 }
 
 fn restore_snapshot(snapshot: &Snapshot) -> Result<()> {
-    let mut error = set_state(snapshot.state).err();
-    for bar in bars()? {
-        let prior = prior(snapshot, &bar);
+    let current_bars = bars()?;
+    let mut error = if current_bars.is_empty() {
+        None
+    } else {
+        set_state(snapshot.state).err()
+    };
+    for bar in &current_bars {
+        let prior = prior(snapshot, bar);
         unclip(HWND(bar.hwnd as _), prior);
         let visible = prior.map(|b| b.visible).unwrap_or(true);
         if state::visibility_diff(visible, bar.visible).is_some() {
@@ -329,7 +339,11 @@ fn restore_snapshot(snapshot: &Snapshot) -> Result<()> {
             }
         }
     }
-    let areas: Vec<_> = snapshot.monitors.iter().map(|m| (m.bounds, m.work)).collect();
+    let areas: Vec<_> = if current_bars.is_empty() && snapshot.bars.is_empty() {
+        snapshot.monitors.iter().map(|m| (m.bounds, m.bounds)).collect()
+    } else {
+        snapshot.monitors.iter().map(|m| (m.bounds, m.work)).collect()
+    };
     if let Err(e) = restore_areas(&areas) {
         error = Some(e);
     }
@@ -341,18 +355,14 @@ fn restore_snapshot(snapshot: &Snapshot) -> Result<()> {
     if let Some(error) = error { Err(error) } else { Ok(()) }
 }
 
-/// Comprehensive emergency restore invoked on panic, unexpected termination, console signals, or shutdown.
-/// Restores any clipped taskbars, resets auto-hide, restores work areas, unregisters HKCU shell override,
-/// and ensures Explorer is running.
-pub fn emergency_restore() {
+/// Restores taskbar visibility, clipping, auto-hide state, and desktop work areas
+/// without altering `HKCU\...\Winlogon\Shell` or spawning `explorer.exe`.
+pub fn restore_taskbar_state() {
     ACTIVE.store(false, Ordering::SeqCst);
     let snapshot = RECOVERY.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(snapshot) = snapshot {
         let _ = restore_snapshot(&snapshot);
     }
-
-    // Revert user Winlogon Shell override in HKCU if exclusive shell was registered
-    let _ = leanshell_platform_win::unregister_exclusive_shell();
 
     // Unclip and show all taskbars across all monitors
     if let Ok(all_bars) = bars() {
@@ -365,28 +375,60 @@ pub fn emergency_restore() {
         }
     }
 
-    // Clear auto-hide on primary taskbar
+    // Clear auto-hide on primary taskbar when present
     let _ = set_state(0);
 
-    // Restore desktop work areas
-    if let Ok(mons) = monitors() {
-        let areas: Vec<_> = mons.iter().map(|m| (m.bounds, m.work)).collect();
+    // Ensure full work areas are restored when no Explorer taskbar owns a strip
+    let has_tray = crate::tray_host::explorer_tray().is_some();
+    if !has_tray && let Ok(mons) = monitors() {
+        let areas: Vec<_> = mons.iter().map(|m| (m.bounds, m.bounds)).collect();
         let _ = restore_areas(&areas);
     }
+}
 
-    // If Explorer is not running, ensure it is spawned
-    let has_explorer = unsafe {
-        FindWindowW(w!("Shell_TrayWnd"), None).is_ok_and(|h| !h.is_invalid())
-            || FindWindowW(w!("Progman"), None).is_ok_and(|h| !h.is_invalid())
-    };
-    if !has_explorer {
-        let _ = std::process::Command::new("explorer.exe").spawn();
+/// Starts `explorer.exe` desktop/taskbar shell when Explorer is not hosting a taskbar.
+/// Temporarily suspends `HKCU\...\Winlogon\Shell` while Explorer boots so Explorer initializes
+/// the Windows taskbar instead of re-launching LeanShell, then restores the registration.
+pub fn ensure_explorer_running() {
+    if crate::tray_host::explorer_tray().is_some() {
+        return;
     }
+    let suspended = leanshell_platform_win::suspend_registered_shell();
+    let _ = Command::new("explorer.exe").spawn();
+    if let Some(shell_cmd) = suspended {
+        for _ in 0..80 {
+            if crate::tray_host::explorer_tray().is_some() {
+                std::thread::sleep(Duration::from_millis(150));
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        leanshell_platform_win::resume_registered_shell(&shell_cmd);
+    }
+}
+
+/// Comprehensive emergency restore invoked on panic, crash watchdog trigger, or console close.
+/// Restores taskbars and work areas and ensures Explorer starts, while preserving
+/// `HKCU\...\Winlogon\Shell` so the exclusive shell remains configured across reboots.
+pub fn emergency_restore() {
+    restore_taskbar_state();
+    ensure_explorer_running();
 }
 
 unsafe extern "system" fn console_handler(event: u32) -> BOOL {
     match event {
-        CTRL_C_EVENT | CTRL_BREAK_EVENT | CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
+        CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
+            STOP_REQUESTED.store(true, Ordering::SeqCst);
+            restore_taskbar_state();
+            let hwnd = HWND(TARGET.load(Ordering::SeqCst) as _);
+            if !hwnd.is_invalid() {
+                unsafe {
+                    let _ = PostMessageW(Some(hwnd), WM_RECOVERY_DONE, WPARAM(0), LPARAM(0));
+                }
+            }
+            BOOL(1)
+        }
+        CTRL_C_EVENT | CTRL_BREAK_EVENT | CTRL_CLOSE_EVENT => {
             STOP_REQUESTED.store(true, Ordering::SeqCst);
             emergency_restore();
             let hwnd = HWND(TARGET.load(Ordering::SeqCst) as _);
@@ -559,23 +601,17 @@ pub struct TaskbarHider {
     _single_instance: Handle,
     restored: bool,
     taskbar_created: u32,
-    /// When the user asked to see the taskbar; hiding waits until they are done.
-    peek: Option<Instant>,
     /// Leaves the primary screen's bottom to a dock that keeps its own space,
     /// instead of reclaiming the taskbar's strip there.
     keep_bottom: bool,
     _thread: PhantomData<Rc<()>>,
 }
 
-/// A peek lasts at least this long, so the pointer can reach the taskbar.
-const PEEK_MIN: Duration = Duration::from_secs(4);
-const PEEK_MAX: Duration = Duration::from_secs(60);
-
 impl TaskbarHider {
     /// Takes the snapshot, starts the watchdog and the show hook. `reapply`
-    /// then hides the taskbars.
+    /// then hides any stray Explorer taskbars.
     /// `notification_window` must be a top-level window pumped by this thread.
-    /// The current executable must dispatch the `--watchdog` mode.
+    /// The current executable must dispatch the `--taskbar-watchdog` mode.
     fn start(notification_window: HWND, enable_watchdog: bool) -> Result<Self> {
         if STOP_REQUESTED.load(Ordering::SeqCst) {
             return Err(failure("Console shutdown was requested"));
@@ -585,14 +621,18 @@ impl TaskbarHider {
         if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
             return Err(failure("A taskbar controller is already running"));
         }
-        let snapshot = Snapshot {
-            state: appbar_state(),
-            bars: bars()?,
-            monitors: monitors()?,
-        };
-        if !snapshot.bars.iter().any(|b| b.class == "Shell_TrayWnd") {
-            return Err(failure("Primary taskbar was not found"));
+        let current_bars = bars()?;
+        let mut mons = monitors()?;
+        if current_bars.is_empty() {
+            for m in &mut mons {
+                m.work = m.bounds;
+            }
         }
+        let snapshot = Snapshot {
+            state: if current_bars.is_empty() { 0 } else { appbar_state() },
+            bars: current_bars,
+            monitors: mons,
+        };
         let watchdog = if enable_watchdog {
             Some(Watchdog::start(&snapshot)?)
         } else {
@@ -619,7 +659,6 @@ impl TaskbarHider {
             _single_instance: mutex,
             restored: false,
             taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
-            peek: None,
             keep_bottom: false,
             _thread: PhantomData,
         };
@@ -648,12 +687,6 @@ impl TaskbarHider {
     pub fn configure(slot: &mut Option<Self>, hwnd: HWND, enabled: bool, enable_watchdog: bool) -> Result<()> {
         if enabled {
             if slot.is_none() {
-                // Keep the controller when this first hide fails, as later
-                // ones do. While Explorer is still switching the taskbar to
-                // auto-hide, it shows a hidden taskbar right away again, most
-                // often a second screen's. The show hook and the retry hide
-                // it once Explorer is done, without restoring the taskbar and
-                // starting a new watchdog in between.
                 slot.insert(Self::start(hwnd, enable_watchdog)?).reapply()?;
             }
         } else if let Some(hider) = slot {
@@ -664,8 +697,7 @@ impl TaskbarHider {
     }
 
     /// With `keep`, leaves the bottom of the primary screen's work area to
-    /// the dock's app bar. The taskbar is auto-hide while hidden, so Windows
-    /// keeps no space for it there anyway.
+    /// the dock's app bar.
     pub fn keep_bottom(&mut self, keep: bool) {
         self.keep_bottom = keep;
     }
@@ -674,61 +706,9 @@ impl TaskbarHider {
         ACTIVE.load(Ordering::SeqCst) && !self.restored
     }
 
-    pub fn is_peeking(&self) -> bool {
-        self.peek.is_some()
-    }
-
-    /// Shows the taskbar until the user is done with it, for anything the
-    /// dock lacks. Call `peek_tick` periodically to hide it again.
-    pub fn peek(&mut self) -> Result<()> {
-        if !self.is_active() {
-            return Ok(());
-        }
-        self.peek = Some(Instant::now());
-        let current = bars()?;
-        for bar in &current {
-            unclip(HWND(bar.hwnd as _), prior(&self.snapshot, bar));
-            unsafe {
-                let _ = ShowWindow(HWND(bar.hwnd as _), SW_SHOWNOACTIVATE);
-            }
-        }
-        // Auto-hide keeps a shown taskbar collapsed until it has the focus or
-        // the pointer. The click that asked for it lets Wisp give it focus.
-        if let Some(primary) = current.iter().find(|bar| bar.class == "Shell_TrayWnd") {
-            unsafe {
-                let _ = SetForegroundWindow(HWND(primary.hwnd as _));
-            }
-        }
-        Ok(())
-    }
-
-    /// Hides the taskbar again once the pointer and focus have left it.
-    /// Returns true when the peek is over.
-    pub fn peek_tick(&mut self) -> Result<bool> {
-        let Some(start) = self.peek else { return Ok(true) };
-        let mut cursor = POINT::default();
-        let _ = unsafe { GetCursorPos(&mut cursor) };
-        let current = bars()?;
-        let over = current.iter().any(|bar| {
-            let r = bar.rect;
-            cursor.x >= r.left && cursor.x < r.right && cursor.y >= r.top && cursor.y < r.bottom
-        });
-        let focused = unsafe {
-            let foreground = GetAncestor(GetForegroundWindow(), GA_ROOTOWNER);
-            current.iter().any(|bar| bar.hwnd == foreground.0 as usize)
-        };
-        let elapsed = start.elapsed();
-        if elapsed < PEEK_MIN || (over || focused) && elapsed < PEEK_MAX {
-            return Ok(false);
-        }
-        self.peek = None;
-        self.reapply()?;
-        Ok(true)
-    }
-
     /// Call for TaskbarCreated, WM_DISPLAYCHANGE, WM_SETTINGCHANGE and WM_TASKBAR_SHOW.
     pub fn reapply(&mut self) -> Result<()> {
-        if !self.is_active() || self.peek.is_some() {
+        if !self.is_active() {
             return Ok(());
         }
         if STOP_REQUESTED.load(Ordering::SeqCst) {
@@ -736,6 +716,9 @@ impl TaskbarHider {
             return Ok(());
         }
         let current = bars()?;
+        if current.is_empty() {
+            return Ok(());
+        }
         if current.iter().any(|bar| bar.visible) {
             println!("reapply: hiding visible taskbar window(s)");
         }
@@ -905,23 +888,18 @@ impl Drop for TaskbarHider {
 pub fn restore_shell_cli() -> Result<()> {
     println!("LeanShell: Coordinated recovery starting...");
 
-    // 1. Signal any running LeanShell instance to quit and release its hooks and appbars.
-    //    Use the actual window class names from src/channel.rs / src/dock.rs, and the real
-    //    quit protocol (WM_APP + 4 = WM_APP_QUIT, which triggers clean shutdown) rather than
-    //    WM_CLOSE (which only hides the launcher window).
+    // 1. Signal any running LeanShell instance to quit with WPARAM(2) (full recovery)
+    //    or tear down its appbars and hooks before we proceed.
     const WM_APP_QUIT: u32 = WM_APP + 4;
     unsafe {
-        // Both stable and nightly launcher class names
         for class in [w!("LeanShell.Launcher"), w!("LeanShell.Nightly.Launcher")] {
             if let Ok(launcher) = FindWindowW(class, None)
                 && !launcher.is_invalid()
             {
-                let _ = PostMessageW(Some(launcher), WM_APP_QUIT, WPARAM(0), LPARAM(0));
-                // Give the instance a moment to tear down its appbars and hooks before we proceed.
-                std::thread::sleep(std::time::Duration::from_millis(500));
+                let _ = PostMessageW(Some(launcher), WM_APP_QUIT, WPARAM(2), LPARAM(0));
+                std::thread::sleep(Duration::from_millis(500));
             }
         }
-        // Dock window (registered class is "Wisp.Dock" for legacy; LeanShell keeps that class name)
         if let Ok(dock) = FindWindowW(w!("Wisp.Dock"), None)
             && !dock.is_invalid()
         {
@@ -929,52 +907,54 @@ pub fn restore_shell_cli() -> Result<()> {
         }
     }
 
-    // 2. Transactionally restore user Winlogon Shell override in HKCU and IFEO host overrides
+    restore_shell_state_and_explorer(true);
+    println!("[SUCCESS] Windows taskbar and Explorer shell restored successfully.");
+    Ok(())
+}
+
+/// Performs in-process full rollback (Winlogon Shell, IFEO hosts, taskbars, DWM borders, and Explorer)
+/// during `HOTKEY_RECOVERY` / `"Restore Windows Explorer & Quit"` teardown without re-signaling self.
+pub fn full_restore_shell_in_process() {
+    restore_shell_state_and_explorer(false);
+}
+
+fn restore_shell_state_and_explorer(log: bool) {
+    // 1. Transactionally restore user Winlogon Shell override in HKCU and IFEO host overrides.
     if let Err(e) = leanshell_platform_win::unregister_exclusive_shell() {
-        eprintln!("  [WARN] Failed to unregister exclusive shell: {e}");
-    } else {
+        if log {
+            eprintln!("  [WARN] Failed to unregister exclusive shell: {e}");
+        }
+    } else if log {
         println!("  [OK] Reverted HKCU Winlogon Shell override to default.");
     }
     match leanshell_platform_win::restore_shell_hosts() {
-        Ok(count) => println!("  [OK] Restored IFEO shell host overrides ({count} entries checked/reverted)."),
-        Err(e) => eprintln!("  [WARN] Could not restore HKLM IFEO host overrides (re-run elevated if needed): {e}"),
-    }
-
-    // 3. Unclip and show all taskbars across all monitors
-    if let Ok(all_bars) = bars() {
-        for bar in all_bars {
-            let hwnd = HWND(bar.hwnd as _);
-            unclip(hwnd, None);
-            unsafe {
-                let _ = ShowWindow(hwnd, SW_SHOW);
-            }
+        Ok(count) if log => println!("  [OK] Restored IFEO shell host overrides ({count} entries checked/reverted)."),
+        Ok(_) => {}
+        Err(e) if log => {
+            eprintln!("  [WARN] Could not restore HKLM IFEO host overrides (re-run elevated if needed): {e}")
         }
-        println!("  [OK] Unclipped and showed all taskbars.");
+        Err(_) => {}
     }
 
-    // 4. Clear auto-hide on primary taskbar
-    let _ = set_state(0);
-
-    // 5. Restore monitor work areas and DWM active border colors
-    if let Ok(mons) = monitors() {
-        let areas: Vec<_> = mons.iter().map(|m| (m.bounds, m.work)).collect();
-        let _ = restore_areas(&areas);
-        println!("  [OK] Restored desktop work areas.");
-    }
+    // 2. Restore taskbar state, work areas, and DWM active border colors.
+    restore_taskbar_state();
     leanshell_platform_win::reset_all_window_borders();
-    println!("  [OK] Reset DWM window border overrides.");
-
-    // 6. If Explorer is not running, start it
-    if crate::tray_host::explorer_tray().is_none() {
-        println!("  [INFO] Explorer shell not detected. Spawning explorer.exe...");
-        match std::process::Command::new("explorer.exe").spawn() {
-            Ok(_) => println!("  [OK] Spawned explorer.exe"),
-            Err(e) => eprintln!("  [ERR] Failed to spawn explorer.exe: {e}"),
-        }
+    if log {
+        println!("  [OK] Restored taskbars, work areas, and DWM borders.");
     }
 
-    println!("[SUCCESS] Windows taskbar and Explorer shell restored successfully.");
-    Ok(())
+    // 3. Ensure Explorer shell restarts to own the desktop and taskbar.
+    if crate::tray_host::explorer_tray().is_none() {
+        if log {
+            println!("  [INFO] Explorer shell not detected. Spawning explorer.exe...");
+        }
+        match Command::new("explorer.exe").spawn() {
+            Ok(_) if log => println!("  [OK] Spawned explorer.exe"),
+            Ok(_) => {}
+            Err(e) if log => eprintln!("  [ERR] Failed to spawn explorer.exe: {e}"),
+            Err(_) => {}
+        }
+    }
 }
 
 /// Prints live shell diagnostics (Track T8).
@@ -983,8 +963,9 @@ pub fn print_diagnostics() {
     println!("Version: {}", env!("CARGO_PKG_VERSION"));
 
     // 1. Session Ownership & Registration
+    let shell_owned = leanshell_platform_win::is_shell_window_owned();
     let is_exclusive = leanshell_platform_win::is_session_exclusive();
-    println!("Live Session Exclusive (GetShellWindow owned): {}", is_exclusive);
+    println!("Live Session Exclusive (GetShellWindow owned): {shell_owned} (exclusive_mode={is_exclusive})");
 
     let registered_shell = leanshell_platform_win::get_registered_shell();
     println!("HKCU Winlogon Shell: {:?}", registered_shell);

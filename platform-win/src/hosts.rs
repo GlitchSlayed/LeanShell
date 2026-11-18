@@ -149,8 +149,9 @@ pub(crate) fn terminate_pids(pids: &[u32]) -> usize {
         // SAFETY: Opening target process strictly with PROCESS_TERMINATE and closing handle on drop.
         if let Ok(proc_handle) = unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) } {
             let proc_handle = OwnedHandle(proc_handle);
-            // SAFETY: Terminating matched process handle.
-            if unsafe { TerminateProcess(proc_handle.0, 0) }.is_ok() {
+            // SAFETY: Terminating matched process handle with non-zero exit code (1) so
+            // Winlogon AutoRestartShell does not respawn an intentionally nuked explorer.exe.
+            if unsafe { TerminateProcess(proc_handle.0, 1) }.is_ok() {
                 killed += 1;
             }
         }

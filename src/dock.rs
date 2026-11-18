@@ -54,7 +54,7 @@ use crate::messages::{
     WM_ARTWORK, WM_CLOSE_FLYOUT, WM_DOCK_STATUS, WM_EXPLORER_REAP_CHECK, WM_FOREGROUND_CHANGED, WM_REFRESH,
     WM_TRAY_CHANGED, WM_WM_ACTION,
 };
-pub use crate::messages::{WM_DOCK_SHOW_TASKBAR, WM_SHOW_LAUNCHER};
+pub use crate::messages::{WM_SHOW_LAUNCHER, WM_SHOW_NOW};
 use crate::theme::{Palette, Tint};
 use crate::tray_host::{self, Action, TrayHost};
 /// Shows a notification icon's tooltip after a short hover.
@@ -2380,7 +2380,7 @@ impl State {
         }
     }
 
-    /// Offers LeanShell settings, taskbar restoration, and Windows taskbar settings.
+    /// Offers LeanShell settings, window management, and full shell recovery.
     fn panel_menu(&mut self) {
         self.close_flyout();
         self.hide_tip();
@@ -2393,8 +2393,7 @@ impl State {
             let _ = AppendMenuW(menu, MF_STRING, 101, w!("Task View (Win+Tab)"));
             let _ = AppendMenuW(menu, MF_STRING, 102, w!("Toggle Window Tiling (Win+T)"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, 1, w!("Show taskbar"));
-            let _ = AppendMenuW(menu, MF_STRING, 2, w!("Taskbar settings"));
+            let _ = AppendMenuW(menu, MF_STRING, 999, w!("Restore Windows Explorer & Quit"));
             let mut point = POINT::default();
             let _ = GetCursorPos(&mut point);
             let _ = SetForegroundWindow(self.hwnd);
@@ -2421,13 +2420,8 @@ impl State {
                 102 => {
                     let _ = PostMessageW(Some(self.owner), WM_WM_ACTION, WPARAM(2), LPARAM(0));
                 }
-                1 => {
-                    let _ = PostMessageW(Some(self.owner), WM_DOCK_SHOW_TASKBAR, WPARAM(0), LPARAM(0));
-                }
-                2 => {
-                    if let Err(error) = crate::launch::open("ms-settings:taskbar") {
-                        eprintln!("Dock taskbar settings: {error}");
-                    }
+                999 => {
+                    let _ = PostMessageW(Some(self.owner), crate::messages::WM_APP_QUIT, WPARAM(2), LPARAM(0));
                 }
                 _ => {}
             }
@@ -2475,7 +2469,13 @@ impl State {
                 self.update_status();
                 return;
             }
-            logic::Part::Clock => "ms-actioncenter:",
+            logic::Part::Clock => {
+                // SAFETY: Posts notification to owner launcher HWND to open Now surface.
+                unsafe {
+                    let _ = PostMessageW(Some(self.owner), WM_SHOW_NOW, WPARAM(0), LPARAM(0));
+                }
+                return;
+            }
             logic::Part::Battery => "ms-settings:batterysaver",
         };
         if let Err(error) = crate::launch::open(target) {

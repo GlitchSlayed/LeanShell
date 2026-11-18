@@ -71,7 +71,7 @@ try {
  foreach($theme in $Themes) { foreach($dpi in $Dpis) { foreach($state in $States) {
   $env:APPDATA=Join-Path $PWD 'target\capture-data'
   New-Item -ItemType Directory -Force "$env:APPDATA\wisp-demo" | Out-Null
-  "theme = `"$theme`"`nposition = `"bottom`"`ndock = true`nhide_taskbar = false`nfile_search = false" | Set-Content "$env:APPDATA\wisp-demo\config.toml"
+  "theme = `"$theme`"`nposition = `"bottom`"`ndock = true`nfile_search = false" | Set-Content "$env:APPDATA\wisp-demo\config.toml"
   $env:WISP_CAPTURE='1'; $env:DOCK_DEMO_DPI="$dpi"; $env:WISP_CAPTURE_QUERY=if($Query) {$Query} elseif($state -eq 'results8') {'e'} elseif($state -eq 'results1') {'zzzzzzzz'} else {'time'}; $env:WISP_FRAME_TIMING='1'; $env:WISP_CAPTURE_ROWS=if($state.StartsWith('results')) {$state.Substring(7)} else {'3'}
   if ($state.StartsWith('morph')) { $env:WISP_CAPTURE_MORPH=([int]$state.Substring(5)/100.0).ToString([Globalization.CultureInfo]::InvariantCulture) } else { Remove-Item Env:\WISP_CAPTURE_MORPH -ErrorAction SilentlyContinue }
   if ($state -eq 'reel') {

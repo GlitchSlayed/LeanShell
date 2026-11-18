@@ -800,7 +800,6 @@ impl SettingsApp {
                     "show_recent" => self.config.show_recent,
                     "dock" => self.config.dock,
                     "dock_autohide" => self.config.dock_autohide,
-                    "hide_taskbar" => self.config.hide_taskbar,
                     "dock_search_button" => self.config.dock_search_button,
                     "wm_enabled" => self.config.wm_enabled,
                     "wm_tiling" => self.config.wm_tiling,
@@ -1861,12 +1860,6 @@ unsafe fn draw_onboarding(
                     "display_mode",
                     &[("dock", "Dock"), ("panel", "Panel"), ("center", "Launcher Only")],
                 );
-                layout.toggle(
-                    "Hide Windows Taskbar",
-                    "Keep the stock taskbar hidden while LeanShell runs.",
-                    app.config.hide_taskbar,
-                    HitAction::ToggleBool { key: "hide_taskbar" },
-                );
                 layout.choices(
                     "Theme",
                     "Follow Windows dark/light mode or pin one explicitly.",
@@ -2095,12 +2088,6 @@ unsafe fn draw_page_content(
                     "Reveal when pointer touches the bottom edge (dock mode).",
                     app.config.dock_autohide,
                     HitAction::ToggleBool { key: "dock_autohide" },
-                );
-                l.toggle(
-                    "Hide Windows Taskbar",
-                    "Hide the stock taskbar window whenever LeanShell runs.",
-                    app.config.hide_taskbar,
-                    HitAction::ToggleBool { key: "hide_taskbar" },
                 );
                 l.toggle(
                     "Show Search Button",

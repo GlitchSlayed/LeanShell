@@ -26,7 +26,6 @@ pub struct Config {
     /// `#RRGGBB` or `#RRGGBBAA`, or empty for the theme's colors.
     pub dock_color: String,
     pub dock_icon_size: i64,
-    pub hide_taskbar: bool,
     pub window_list: String,
     pub display_mode: String,
     pub panel_edge: String,
@@ -152,7 +151,6 @@ impl Config {
             dock_screen,
             dock_color,
             dock_icon_size,
-            hide_taskbar: boolean("hide_taskbar")?,
             window_list,
             display_mode,
             panel_edge,
@@ -330,8 +328,7 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         | "dock_autohide"
         | "dock_search_button"
         | "dock_screen"
-        | "dock_icon_size"
-        | "hide_taskbar" => {}
+        | "dock_icon_size" => {}
         "window_list" if !matches!(value.as_str(), Some("always" | "multiple" | "off")) => {
             return Err("window_list must be always, multiple or off.".into());
         }
@@ -403,14 +400,14 @@ mod tests {
         assert!(config.show_recent && config.file_search);
         assert_eq!(config.file_search_exclude.len(), 14);
         assert_eq!(config.position, "bottom");
-        assert!(config.dock && config.dock_autohide && config.hide_taskbar);
+        assert!(config.dock && config.dock_autohide);
         assert!(config.dock_search_button);
         assert_eq!(config.dock_screen, "pointer");
         assert!(config.dock_color.is_empty());
         assert_eq!(config.dock_icon_size, 32);
-        // A config from Wisp 0.3 has no dock keys and keeps the taskbar, as in the launcher.
+        // A config from Wisp 0.3 has no dock keys, as in the launcher.
         let old = Config::from_document(&"hotkey = 'Alt+Space'".parse().unwrap()).unwrap();
-        assert!(!old.dock && !old.hide_taskbar);
+        assert!(!old.dock);
         assert_eq!(old.position, "center");
         assert_eq!(old.max_results, config.max_results);
         assert_eq!(config.window_list, "multiple");
@@ -432,8 +429,13 @@ mod tests {
         assert_eq!(config.update_check_hours, 6);
         assert_eq!(Config::from_document(&DEFAULT_CONFIG.parse().unwrap()).unwrap(), config);
 
-        // Legacy Slint renderer keys in user configs are ignored cleanly.
-        let legacy = Config::from_document(&"backend = 'slint'\nslint_renderer = 'vello'".parse().unwrap()).unwrap();
+        // Legacy Slint renderer and hide_taskbar keys in user configs are ignored cleanly.
+        let legacy = Config::from_document(
+            &"backend = 'slint'\nslint_renderer = 'vello'\nhide_taskbar = false"
+                .parse()
+                .unwrap(),
+        )
+        .unwrap();
         assert!(legacy.wm_enabled);
     }
 

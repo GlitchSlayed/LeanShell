@@ -115,7 +115,6 @@ pub enum AutoUpdateMode {
 /// then from the default config.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    pub hide_taskbar: bool,
     pub dock: bool,
     pub dock_autohide: bool,
     #[serde(default = "default_true")]
@@ -305,11 +304,11 @@ mod tests {
     fn missing_keys_keep_a_config_from_before_the_dock() {
         let config = Config::parse("hotkey = \"Ctrl+Space\"").unwrap();
         assert_eq!((config.hotkey.as_str(), config.max_results), ("Ctrl+Space", 8));
-        assert!(!config.dock && !config.hide_taskbar);
+        assert!(!config.dock);
         assert_eq!(config.position, Position::Center);
 
         let default = Config::default();
-        assert!(default.dock && default.hide_taskbar);
+        assert!(default.dock);
         assert_eq!(default.dock_icon_size, 32);
         assert_eq!(default.position, Position::Bottom);
         assert_eq!(default.shell_mode, ShellMode::Exclusive);

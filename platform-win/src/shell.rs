@@ -76,33 +76,40 @@ pub fn is_exclusive_shell_registered() -> bool {
     get_registered_shell().is_some()
 }
 
-/// Detects whether LeanShell is ACTUALLY owning the current desktop session as the shell,
-/// rather than running as a companion alongside Windows Explorer.
-///
-/// Verifies `GetShellWindow()` ownership: if the shell window belongs to another process
-/// (such as explorer.exe), LeanShell is in companion mode regardless of configured preferences.
-pub fn is_session_exclusive() -> bool {
-    // SAFETY: Querying Windows desktop shell window
+/// Returns `true` if `GetShellWindow()` belongs to the running LeanShell process
+/// or is an active `LeanShellDesktop` window.
+pub fn is_shell_window_owned() -> bool {
+    // SAFETY: Querying Windows desktop shell window, its owning PID, and class name.
     unsafe {
         let shell_hwnd = GetShellWindow();
-        if !shell_hwnd.is_invalid() {
-            let mut pid = 0u32;
-            GetWindowThreadProcessId(shell_hwnd, Some(&mut pid));
-            return pid == std::process::id();
+        if shell_hwnd.is_invalid() {
+            return false;
         }
-        // If GetShellWindow() is invalid, check if Explorer's Progman or Shell_TrayWnd exists
-        for class in [w!("Progman"), w!("Shell_TrayWnd")] {
-            if let Ok(hwnd) = windows::Win32::UI::WindowsAndMessaging::FindWindowW(class, None)
-                && !hwnd.is_invalid()
-            {
-                let mut pid = 0u32;
-                GetWindowThreadProcessId(hwnd, Some(&mut pid));
-                if pid != 0 && pid != std::process::id() {
-                    return false;
-                }
-            }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(shell_hwnd, Some(&mut pid));
+        if pid == std::process::id() {
+            return true;
         }
-        is_exclusive_shell_registered()
+        let mut class = [0u16; 32];
+        let len = windows::Win32::UI::WindowsAndMessaging::GetClassNameW(shell_hwnd, &mut class) as usize;
+        class[..len].iter().copied().eq("LeanShellDesktop".encode_utf16())
+    }
+}
+
+/// Detects whether LeanShell is operating in exclusive shell posture.
+///
+/// Returns `true` when `GetShellWindow()` belongs to LeanShell, no other process
+/// holds `GetShellWindow()` (`is_invalid()`), or exclusive shell registration is set.
+pub fn is_session_exclusive() -> bool {
+    // SAFETY: Querying Windows desktop shell window.
+    unsafe {
+        let shell_hwnd = GetShellWindow();
+        if shell_hwnd.is_invalid() {
+            return true;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(shell_hwnd, Some(&mut pid));
+        pid == std::process::id() || is_exclusive_shell_registered()
     }
 }
 
@@ -211,6 +218,33 @@ pub fn unregister_exclusive_shell() -> Result<()> {
         }
 
         Ok(())
+    }
+}
+
+/// Temporarily deletes `HKCU\...\Winlogon\Shell` (without touching `BackupShell`) and returns its prior
+/// command string so Explorer can boot its desktop/taskbar instead of re-launching the custom shell.
+pub fn suspend_registered_shell() -> Option<String> {
+    let current = get_registered_shell()?;
+    // SAFETY: Deletes only per-user Winlogon Shell value in HKCU while preserving BackupShell.
+    unsafe {
+        let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, WINLOGON_SUBKEY, SHELL_VALUE);
+    }
+    Some(current)
+}
+
+/// Restores `HKCU\...\Winlogon\Shell` after a temporary [`suspend_registered_shell`] call.
+pub fn resume_registered_shell(shell_command: &str) {
+    let wide: Vec<u16> = shell_command.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: Restores per-user HKCU Winlogon Shell string value.
+    unsafe {
+        let _ = RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            WINLOGON_SUBKEY,
+            SHELL_VALUE,
+            REG_SZ.0,
+            Some(wide.as_ptr().cast()),
+            (wide.len() * 2) as u32,
+        );
     }
 }
 

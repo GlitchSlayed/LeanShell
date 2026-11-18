@@ -19,7 +19,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Shell::{
     ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_GETTASKBARPOS, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS,
-    ABN_POSCHANGED, APPBARDATA, SHAllocShared, SHAppBarMessage, SHFreeShared, SHLockShared, SHUnlockShared,
+    ABN_POSCHANGED, APPBARDATA, SHAllocShared, SHFreeShared, SHLockShared, SHUnlockShared,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Error, HRESULT, Result, w};
@@ -297,12 +297,19 @@ fn unregister(hwnd: HWND) {
         && let Some((monitor, _, _)) = screen()
     {
         let mut work = monitor;
+        // SAFETY: Restores full work area and notifies top-level windows without blocking.
         unsafe {
             let _ = SystemParametersInfoW(
                 SPI_SETWORKAREA,
                 0,
                 Some(&mut work as *mut _ as _),
                 SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            );
+            let _ = PostMessageW(
+                Some(HWND_BROADCAST),
+                WM_SETTINGCHANGE,
+                WPARAM(SPI_SETWORKAREA.0 as usize),
+                LPARAM(0),
             );
         }
     }
@@ -337,7 +344,8 @@ struct WireMessage {
 /// windows would cover the dock until something else made it.
 fn send(message: u32, data: &mut APPBARDATA) -> usize {
     let Some((tray, explorer)) = crate::tray_host::explorer_tray() else {
-        return unsafe { SHAppBarMessage(message, data) };
+        // Standalone exclusive shell: LeanShell manages the work area directly via SPI_SETWORKAREA.
+        return 1;
     };
     let wire = WireData {
         cb_size: size_of::<WireData>() as u32,
@@ -446,12 +454,19 @@ fn place(hwnd: HWND) {
             ABE_RIGHT => work.right -= thickness,
             _ => work.bottom -= thickness,
         }
+        // SAFETY: Updates monitor work area directly and notifies top-level windows without blocking.
         unsafe {
             let _ = SystemParametersInfoW(
                 SPI_SETWORKAREA,
                 0,
                 Some(&mut work as *mut _ as _),
                 SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            );
+            let _ = PostMessageW(
+                Some(HWND_BROADCAST),
+                WM_SETTINGCHANGE,
+                WPARAM(SPI_SETWORKAREA.0 as usize),
+                LPARAM(0),
             );
         }
     }

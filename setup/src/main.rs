@@ -144,8 +144,7 @@ fn main() {
             }
             let opts = InstallOptions {
                 launch_after: launch,
-                // Silent WinGet / automated installs default to keeping standard session unless user opts into exclusive shell via GUI/config.
-                exclusive_shell: false,
+                exclusive_shell: true,
                 ..InstallOptions::default()
             };
             if let Err(e) = perform_install(&install::default_install_dir(), opts) {
@@ -324,7 +323,7 @@ fn collect_payload(setup_exe: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
     Ok(out)
 }
 
-fn stop_running_instances() {
+fn stop_running_instances(hot_restart: bool) {
     // SAFETY: Requests any running LeanShell launcher instance to close gracefully so files can be swapped.
     unsafe {
         for class in [w!("LeanShell.Launcher"), w!("LeanShell.Nightly.Launcher")] {
@@ -334,7 +333,9 @@ fn stop_running_instances() {
                 let mut pid = 0u32;
                 GetWindowThreadProcessId(hwnd, Some(&mut pid));
                 let proc_handle = OpenProcess(PROCESS_SYNCHRONIZE, false, pid).ok();
-                let _ = PostMessageW(Some(hwnd), WM_APP + 4, WPARAM(0), LPARAM(0));
+                // WPARAM(1) signals hot restart so LeanShell preserves Winlogon\Shell and does not respawn Explorer.
+                let mode = if hot_restart { 1 } else { 0 };
+                let _ = PostMessageW(Some(hwnd), WM_APP + 4, WPARAM(mode), LPARAM(0));
                 if let Some(h) = proc_handle {
                     let _ = WaitForSingleObject(h, 4000) == WAIT_OBJECT_0;
                     let _ = CloseHandle(h);
@@ -348,7 +349,7 @@ fn perform_install(target_dir: &Path, opts: InstallOptions) -> Result<(), String
     let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let payload = collect_payload(&current_exe)?;
 
-    stop_running_instances();
+    stop_running_instances(true);
 
     std::fs::create_dir_all(target_dir).map_err(|e| format!("Cannot create {}: {e}", target_dir.display()))?;
 
@@ -382,6 +383,7 @@ fn perform_install(target_dir: &Path, opts: InstallOptions) -> Result<(), String
     if opts.exclusive_shell {
         leanshell_platform_win::register_exclusive_shell(&installed_exe)
             .map_err(|e| format!("Failed to register exclusive shell: {e}"))?;
+        let _ = leanshell_platform_win::nuke_explorer_shell();
     }
     if opts.neuter_hosts {
         let _ = leanshell_platform_win::neuter_shell_hosts(leanshell_core::DEFAULT_NEUTERED_HOSTS);
@@ -401,7 +403,7 @@ fn perform_uninstall(target_dir: &Path) -> Result<(), String> {
             .creation_flags(CREATE_NO_WINDOW)
             .status();
     } else {
-        stop_running_instances();
+        stop_running_instances(false);
         let _ = leanshell_platform_win::unregister_exclusive_shell();
         let _ = leanshell_platform_win::restore_shell_hosts();
     }
@@ -443,8 +445,13 @@ fn perform_uninstall(target_dir: &Path) -> Result<(), String> {
 }
 
 fn launch_unelevated(exe: &Path) {
-    // Invoking through explorer.exe drops setup's admin token so LeanShell runs under the normal user token.
-    let _ = std::process::Command::new("explorer.exe").arg(exe).spawn();
+    // Launch directly in a detached process group without explorer.exe so Windows Explorer's shell/taskbar never starts.
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    let _ = std::process::Command::new(exe)
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        .spawn();
 }
 
 fn write_auto_update_config(enabled: bool) {

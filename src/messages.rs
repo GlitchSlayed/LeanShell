@@ -26,9 +26,7 @@ pub const WM_APP_TOGGLE: u32 = WM_APP + 9;
 pub const WM_SHOW_LAUNCHER: u32 = WM_APP + 20;
 pub const WM_REFRESH: u32 = WM_APP + 21;
 pub const WM_TRAY_CHANGED: u32 = WM_APP + 22;
-pub const WM_DOCK_SHOW_TASKBAR: u32 = WM_APP + 23;
 pub const WM_CLOSE_FLYOUT: u32 = WM_APP + 24;
-#[allow(dead_code)]
 pub const WM_SHOW_NOW: u32 = WM_APP + 25;
 #[allow(dead_code)]
 pub const WM_RADIOS: u32 = WM_APP + 26;
@@ -45,6 +43,8 @@ pub const WM_FOREGROUND_CHANGED: u32 = WM_APP + 31;
 pub const WM_TASKBAR_SHOW: u32 = WM_APP + 40;
 #[allow(dead_code)]
 pub const WM_RECOVERY_DONE: u32 = WM_APP + 41;
+/// The taskbar thread finished a job.
+pub const WM_TASKBAR_RESULT: u32 = WM_APP + 42;
 /// The dock space's app bar callback.
 pub const WM_APPBAR: u32 = WM_APP + 50;
 pub const WM_CHECK: u32 = WM_APP + 51;
@@ -81,7 +81,6 @@ mod tests {
             WM_SHOW_LAUNCHER,
             WM_REFRESH,
             WM_TRAY_CHANGED,
-            WM_DOCK_SHOW_TASKBAR,
             WM_CLOSE_FLYOUT,
             WM_SHOW_NOW,
             WM_RADIOS,
@@ -92,6 +91,7 @@ mod tests {
             WM_FOREGROUND_CHANGED,
             WM_TASKBAR_SHOW,
             WM_RECOVERY_DONE,
+            WM_TASKBAR_RESULT,
             WM_APPBAR,
             WM_CHECK,
             WM_SET_HEIGHT,

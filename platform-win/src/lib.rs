@@ -19,10 +19,11 @@ pub use backdrop::apply_backdrop;
 pub use hook::{ShellChord, WM_SHELL_CHORD, WinKeyHook, WinKeyTracker};
 pub use hosts::{is_host_neutered, neuter_shell_hosts, restore_shell_hosts, terminate_processes_by_name};
 pub use hotkey::HotkeyManager;
-pub use reaper::{inspect_explorer_windows, is_explorer_running, reap_idle_explorer};
+pub use reaper::{inspect_explorer_windows, is_explorer_running, nuke_explorer_shell, reap_idle_explorer};
 pub use shell::{
     get_backup_shell, get_registered_shell, is_exclusive_shell_registered, is_safe_mode_requested,
-    is_session_exclusive, register_exclusive_shell, unregister_exclusive_shell,
+    is_session_exclusive, is_shell_window_owned, register_exclusive_shell, resume_registered_shell,
+    suspend_registered_shell, unregister_exclusive_shell,
 };
 pub use shell_menu::show_shell_context_menu;
 pub use window_hook::WindowHook;

@@ -40,7 +40,6 @@ if (-not (Test-Path $config)) {
 # Nightly features
 position = "bottom"
 dock = true
-hide_taskbar = true
 "@
     Set-Content $config $text -Encoding utf8
     if (Test-Path "$stable\history.toml") { Copy-Item "$stable\history.toml" $data }

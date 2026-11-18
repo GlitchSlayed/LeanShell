@@ -78,11 +78,65 @@ pub fn inspect_explorer_windows() -> (bool, usize, usize) {
     (true, folders, dialogs)
 }
 
-/// Reaps idle `explorer.exe` instances if and only if LeanShell exclusively owns
-/// the desktop shell, `auto_reap_enabled` is true, and no folder windows or
-/// file-operation dialogs are currently visible.
+/// Immediately closes or terminates all running `explorer.exe` processes so LeanShell
+/// exclusively owns `GetShellWindow()` and prevents any Windows taskbar from running.
+pub fn nuke_explorer_shell() -> bool {
+    let pids = explorer_pids();
+    if pids.is_empty() {
+        return false;
+    }
+    if post_quit_to_explorer_shells(&pids) {
+        std::thread::sleep(std::time::Duration::from_millis(120));
+    }
+    let remaining = explorer_pids();
+    let killed = if remaining.is_empty() {
+        pids.len()
+    } else {
+        crate::hosts::terminate_pids(&remaining)
+    };
+    killed > 0 || remaining.len() < pids.len()
+}
+
+fn post_quit_to_explorer_shells(pids: &[u32]) -> bool {
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowExW, GetWindowThreadProcessId, PostMessageW, WM_QUIT};
+    use windows::core::w;
+
+    let classes = [w!("Shell_TrayWnd"), w!("Shell_SecondaryTrayWnd"), w!("Progman")];
+    let mut posted = false;
+    for class in classes {
+        let mut cursor = HWND::default();
+        loop {
+            // SAFETY: Enumerates top-level desktop windows by static class name.
+            let found = unsafe { FindWindowExW(None, Some(cursor), class, None) };
+            let Ok(hwnd) = found else {
+                break;
+            };
+            if hwnd.0.is_null() {
+                break;
+            }
+            cursor = hwnd;
+            let mut pid = 0u32;
+            // SAFETY: Reads owning process id of an existing HWND.
+            unsafe {
+                let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            }
+            if pids.contains(&pid) {
+                // SAFETY: Posting WM_QUIT to Explorer's shell/taskbar thread requests graceful exit.
+                unsafe {
+                    let _ = PostMessageW(Some(hwnd), WM_QUIT, WPARAM(0), LPARAM(0));
+                }
+                posted = true;
+            }
+        }
+    }
+    posted
+}
+
+/// Reaps idle `explorer.exe` instances if `auto_reap_enabled` is true and no
+/// folder windows or file-operation dialogs are currently visible.
 pub fn reap_idle_explorer(auto_reap_enabled: bool) -> bool {
-    if !auto_reap_enabled || !crate::shell::is_session_exclusive() {
+    if !auto_reap_enabled {
         return false;
     }
     let pids = explorer_pids();
