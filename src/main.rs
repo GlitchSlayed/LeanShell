@@ -37,6 +37,9 @@ mod taskbar;
 mod theme;
 mod tray;
 mod tray_host;
+#[allow(dead_code)]
+#[path = "../settings/src/update.rs"]
+mod update;
 mod util;
 mod wm;
 

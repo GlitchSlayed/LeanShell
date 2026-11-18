@@ -10,13 +10,18 @@ use std::{
     time::Duration,
 };
 
+pub use leanshell_core::updater::apply_staged_dir;
+use leanshell_core::updater::{ALL_MANAGED_FILES, old_path, rollback_dir};
 use sha2::{Digest, Sha256};
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HANDLE, LPARAM, WAIT_ABANDONED, WAIT_OBJECT_0, WPARAM},
+        Foundation::{CloseHandle, HANDLE, LPARAM, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM},
         Networking::WinHttp::*,
         System::Threading::*,
-        UI::WindowsAndMessaging::*,
+        UI::{
+            Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW},
+            WindowsAndMessaging::*,
+        },
     },
     core::{PCWSTR, PWSTR, w},
 };
@@ -27,6 +32,7 @@ const FILES: [(&str, &str); 2] = [
     ("leanshell-settings.exe", "leanshell-settings"),
 ];
 /// The launcher quits when it receives this message (WM_APP_QUIT in the launcher).
+/// `WPARAM(1)` requests a zero-taskbar-flash hot-restart handoff.
 const LAUNCHER_QUIT: u32 = WM_APP + 4;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,7 +71,8 @@ pub fn check() -> Result<Option<Release>, String> {
 }
 
 /// Downloads, verifies and installs `release`. Restarts the launcher if it was
-/// running. This app keeps running the old version until it restarts.
+/// running. When the install folder is not writable without elevation (e.g.
+/// `%ProgramFiles%\LeanShell`), stages in `%TEMP%` and elevates the swap helper.
 pub fn install(release: &Release) -> Result<(), String> {
     if let Some(manager) = crate::install::current_manager() {
         return Err(manager.instruction().into());
@@ -75,36 +82,172 @@ pub fn install(release: &Release) -> Result<(), String> {
     let sums = String::from_utf8_lossy(&get(release.asset_url("SHA256SUMS.txt")?)?).into_owned();
     let sums = parse_sums(&sums);
 
-    let staged = stage_release(release, &sums, &dir, get)?;
+    let writable = crate::install::is_dir_writable(&dir);
+    let temp_stage = (!writable)
+        .then(|| std::env::temp_dir().join(format!("leanshell-update-{}-{}", release.version(), std::process::id())));
+    let stage_dir = temp_stage.as_deref().unwrap_or(&dir);
+    if let Some(temp) = &temp_stage {
+        std::fs::create_dir_all(temp)
+            .map_err(|error| format!("Cannot create temporary update folder {}: {error}", temp.display()))?;
+    }
 
-    let remove_staged = || {
-        for (_, new) in &staged {
-            let _ = std::fs::remove_file(new);
+    let staged = stage_release(release, &sums, stage_dir, get).inspect_err(|_| {
+        if let Some(temp) = &temp_stage {
+            let _ = std::fs::remove_dir_all(temp);
         }
-    };
-    let launcher_was_running = stop_launcher(&dir).inspect_err(|_| remove_staged())?;
-    let mut swapped: Vec<(PathBuf, PathBuf)> = Vec::new();
-    for (target, new) in &staged {
-        if let Err(error) = swap(target, new) {
-            // Put back what was already replaced, so both files stay the same version.
-            for (target, old) in swapped.iter().rev().filter(|(_, old)| old.exists()) {
-                let _ = std::fs::remove_file(target);
-                let _ = std::fs::rename(old, target);
-            }
-            remove_staged();
-            if launcher_was_running {
-                let _ = std::process::Command::new(dir.join("leanshell.exe")).spawn();
-            }
+    })?;
+
+    let launcher_was_running = match stop_launcher(&dir) {
+        Ok(running) => running,
+        Err(error) => {
+            cleanup_staged(&staged, temp_stage.as_deref());
             return Err(error);
         }
-        swapped.push((target.clone(), old_path(target)));
+    };
+
+    let swap_result = if writable {
+        apply_staged_dir(stage_dir, &dir)
+    } else {
+        run_elevated_swap(stage_dir, &dir)
+    };
+    cleanup_staged(&staged, temp_stage.as_deref());
+
+    if let Err(error) = swap_result {
+        if launcher_was_running {
+            let _ = std::process::Command::new(dir.join("leanshell.exe")).spawn();
+        }
+        return Err(error);
     }
+
     if launcher_was_running {
-        std::process::Command::new(dir.join("leanshell.exe"))
-            .spawn()
-            .map_err(|error| format!("LeanShell is updated, but it did not restart: {error}"))?;
+        spawn_and_verify_launcher(&dir)?;
     }
     Ok(())
+}
+
+/// Downloads and verifies `release` into a temporary staging folder for a self-handoff
+/// update triggered inside the running `leanshell.exe` daemon. Returns `(stage_dir, target_dir)`.
+pub fn stage_for_self_handoff(release: &Release) -> Result<(PathBuf, PathBuf), String> {
+    if let Some(manager) = crate::install::current_manager() {
+        return Err(manager.instruction().into());
+    }
+    let target_dir = install_dir()?;
+    let sums = String::from_utf8_lossy(&get(release.asset_url("SHA256SUMS.txt")?)?).into_owned();
+    let sums = parse_sums(&sums);
+    let stage_dir = std::env::temp_dir().join(format!(
+        "leanshell-handoff-{}-{}",
+        release.version(),
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&stage_dir).map_err(|error| format!("Cannot prepare update staging folder: {error}"))?;
+    if let Err(error) = stage_release(release, &sums, &stage_dir, get) {
+        let _ = std::fs::remove_dir_all(&stage_dir);
+        return Err(error);
+    }
+    Ok((stage_dir, target_dir))
+}
+
+/// Executed by a temporary un-elevated handoff executable after `leanshell.exe`
+/// requests a hot restart (`WPARAM(1)`): waits for `parent_pid` to exit, applies
+/// `stage_dir` into `target_dir` (elevating only if needed), and spawns the new shell.
+pub fn execute_handoff_update(stage_dir: &Path, target_dir: &Path, parent_pid: u32) -> Result<(), String> {
+    let _lock = UpdateLock::acquire().ok_or("Another update is already running.")?;
+    wait_for_pid_exit(parent_pid, 8000);
+    let swap_result = if crate::install::is_dir_writable(target_dir) {
+        apply_staged_dir(stage_dir, target_dir)
+    } else {
+        run_elevated_swap(stage_dir, target_dir)
+    };
+    let _ = std::fs::remove_dir_all(stage_dir);
+    if let Err(error) = swap_result {
+        let _ = std::process::Command::new(target_dir.join("leanshell.exe")).spawn();
+        return Err(error);
+    }
+    spawn_and_verify_launcher(target_dir)
+}
+
+fn cleanup_staged(staged: &[(PathBuf, PathBuf)], temp_stage: Option<&Path>) {
+    for (_, new) in staged {
+        let _ = std::fs::remove_file(new);
+    }
+    if let Some(temp) = temp_stage {
+        let _ = std::fs::remove_dir_all(temp);
+    }
+}
+
+fn run_elevated_swap(stage_dir: &Path, target_dir: &Path) -> Result<(), String> {
+    let setup_exe = target_dir.join("leanshell-setup.exe");
+    let launcher_exe = target_dir.join("leanshell.exe");
+    let helper = if setup_exe.is_file() { setup_exe } else { launcher_exe };
+    let exe_w = wide(helper.to_string_lossy().as_ref());
+    let params_w = wide(format!(
+        "--apply-staged-update \"{}\" --target-dir \"{}\"",
+        stage_dir.display(),
+        target_dir.display()
+    ));
+
+    // SAFETY: Elevated child helper runs with UAC consent to swap binaries in %ProgramFiles%;
+    // handle is awaited and closed before returning.
+    unsafe {
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+            fMask: SEE_MASK_NOCLOSEPROCESS,
+            lpVerb: w!("runas"),
+            lpFile: PCWSTR(exe_w.as_ptr()),
+            lpParameters: PCWSTR(params_w.as_ptr()),
+            nShow: SW_HIDE.0,
+            ..Default::default()
+        };
+        ShellExecuteExW(&mut info).map_err(|error| format!("UAC elevation cancelled or failed: {error}"))?;
+        if info.hProcess.is_invalid() {
+            return Err("Elevated updater process handle was invalid.".into());
+        }
+        let wait = WaitForSingleObject(info.hProcess, 60_000);
+        let mut exit_code = 1u32;
+        let _ = GetExitCodeProcess(info.hProcess, &mut exit_code);
+        let _ = CloseHandle(info.hProcess);
+        if wait != WAIT_OBJECT_0 || exit_code != 0 {
+            return Err(format!("Elevated file swap failed (code {exit_code})."));
+        }
+    }
+    Ok(())
+}
+
+fn spawn_and_verify_launcher(dir: &Path) -> Result<(), String> {
+    let exe = dir.join("leanshell.exe");
+    let mut child = std::process::Command::new(&exe)
+        .spawn()
+        .map_err(|error| format!("LeanShell updated, but could not start: {error}"))?;
+
+    // Give the new process 1.5s to initialize its window and event hooks; if it exits
+    // prematurely with an error, automatically restore the previous .old build.
+    std::thread::sleep(Duration::from_millis(1500));
+    match child.try_wait() {
+        Ok(Some(status)) if !status.success() => {
+            if crate::install::is_dir_writable(dir) {
+                let _ = rollback_dir(dir);
+            }
+            let _ = std::process::Command::new(&exe).spawn();
+            Err(format!(
+                "Updated build exited early ({status}); rolled back to previous version."
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn wait_for_pid_exit(pid: u32, timeout_ms: u32) {
+    if pid == 0 {
+        return;
+    }
+    // SAFETY: Standard synchronization wait on caller parent PID before file replacement.
+    unsafe {
+        if let Ok(proc_handle) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
+            let wait = WaitForSingleObject(proc_handle, timeout_ms);
+            let _ = wait == WAIT_TIMEOUT;
+            let _ = CloseHandle(proc_handle);
+        }
+    }
 }
 
 /// Verifies the complete download before writing either staged executable.
@@ -116,25 +259,38 @@ fn stage_release(
     mut download: impl FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<Vec<(PathBuf, PathBuf)>, String> {
     let zip_name = format!("leanshell-{}-x86_64-windows.zip", release.tag);
-    let contents = if let Ok(url) = release.asset_url(&zip_name) {
+    let mut entries: Vec<(&'static str, Vec<u8>)> = Vec::new();
+    if let Ok(url) = release.asset_url(&zip_name) {
         let bytes = download(url)?;
         verify(&zip_name, &bytes, sums)?;
-        extract_executables(&bytes, &release.tag)?
+        let required = extract_executables(&bytes, &release.tag)?;
+        for ((file, _), data) in FILES.iter().zip(required) {
+            entries.push((*file, data));
+        }
+        if let Some(setup_bytes) = extract_optional_executable(&bytes, &release.tag, "leanshell-setup.exe") {
+            entries.push(("leanshell-setup.exe", setup_bytes));
+        }
     } else {
-        let mut contents = Vec::new();
-        for (_, stem) in FILES {
+        for (file, stem) in FILES {
             let name = format!("{stem}-{}-x86_64.exe", release.tag);
             let bytes = download(release.asset_url(&name)?)?;
             verify(&name, &bytes, sums)?;
-            contents.push(bytes);
+            entries.push((file, bytes));
         }
-        contents
-    };
-    let staged: Vec<_> = FILES
+        let setup_asset = format!("leanshell-setup-{}-x86_64.exe", release.tag);
+        if let Ok(url) = release.asset_url(&setup_asset)
+            && let Ok(bytes) = download(url)
+            && verify(&setup_asset, &bytes, sums).is_ok()
+        {
+            entries.push(("leanshell-setup.exe", bytes));
+        }
+    }
+
+    let staged: Vec<_> = entries
         .iter()
         .map(|(file, _)| (dir.join(file), dir.join(format!("{file}.new"))))
         .collect();
-    for ((_, new), bytes) in staged.iter().zip(contents) {
+    for ((_, new), (_, bytes)) in staged.iter().zip(entries) {
         if let Err(error) = std::fs::write(new, bytes) {
             for (_, new) in &staged {
                 let _ = std::fs::remove_file(new);
@@ -190,6 +346,25 @@ fn extract_executables(bytes: &[u8], tag: &str) -> Result<Vec<Vec<u8>>, String> 
     Ok(contents)
 }
 
+fn extract_optional_executable(bytes: &[u8], tag: &str, file: &str) -> Option<Vec<u8>> {
+    use std::io::{Cursor, Read};
+
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).ok()?;
+    let folder = format!("leanshell-{tag}-x86_64-windows");
+    let slash = format!("{folder}/{file}");
+    let backslash = format!("{folder}\\{file}");
+    let name = [file, slash.as_str(), backslash.as_str()]
+        .into_iter()
+        .find(|candidate| archive.file_names().any(|n| n == *candidate))?;
+    let mut entry = archive.by_name(name).ok()?;
+    if entry.is_dir() {
+        return None;
+    }
+    let mut out = Vec::new();
+    entry.read_to_end(&mut out).ok()?;
+    Some(out)
+}
+
 /// Starts the new settings app on the About page. The caller then quits.
 pub fn restart_settings() -> Result<(), String> {
     let exe = install_dir()?.join("leanshell-settings.exe");
@@ -200,10 +375,8 @@ pub fn restart_settings() -> Result<(), String> {
         .map_err(|error| format!("Cannot restart settings: {error}"))
 }
 
-/// Deletes the `.old` files a previous update left behind, on a background
-/// thread. Right after Restart, the old settings app may still be running from
-/// `leanshell-settings.exe.old`, so this retries for a few seconds. It skips files
-/// while an update runs, because they are that update's backups.
+/// Deletes the `.old` files a previous update left behind, and any stale
+/// self-update handoff binaries in `%TEMP%`, on a background thread.
 pub fn remove_old_files() {
     if crate::install::current_manager().is_some() {
         return;
@@ -212,10 +385,20 @@ pub fn remove_old_files() {
         return;
     };
     std::thread::spawn(move || {
+        if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str()
+                    && name.starts_with("leanshell-handoff-")
+                    && name.ends_with(".exe")
+                {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
         for _ in 0..20 {
             if let Some(_lock) = UpdateLock::acquire() {
                 let mut left = false;
-                for (file, _) in FILES {
+                for file in ALL_MANAGED_FILES {
                     let old = old_path(&dir.join(file));
                     left |= old.exists() && std::fs::remove_file(&old).is_err();
                 }
@@ -263,25 +446,6 @@ fn install_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "Cannot find the LeanShell folder.".into())
 }
 
-fn old_path(target: &Path) -> PathBuf {
-    let mut name = target.as_os_str().to_owned();
-    name.push(".old");
-    PathBuf::from(name)
-}
-
-fn swap(target: &Path, new: &Path) -> Result<(), String> {
-    let old = old_path(target);
-    let _ = std::fs::remove_file(&old);
-    let fail = |error: std::io::Error| format!("Cannot replace {}: {error}", target.display());
-    if target.exists() {
-        std::fs::rename(target, &old).map_err(fail)?;
-    }
-    std::fs::rename(new, target).map_err(|error| {
-        let _ = std::fs::rename(&old, target);
-        fail(error)
-    })
-}
-
 /// Asks the launcher running from `dir` to quit and waits up to 5 s for it to
 /// exit. Returns whether it was running. A launcher from another folder keeps
 /// running.
@@ -296,7 +460,7 @@ fn stop_launcher(dir: &Path) -> Result<bool, String> {
             .map_err(|error| format!("Cannot find the running LeanShell: {error}"))?;
         let result = if !same_file(&process_path(process), &dir.join("leanshell.exe")) {
             Ok(false)
-        } else if PostMessageW(Some(hwnd), LAUNCHER_QUIT, WPARAM(0), LPARAM(0)).is_ok()
+        } else if PostMessageW(Some(hwnd), LAUNCHER_QUIT, WPARAM(1), LPARAM(0)).is_ok()
             && WaitForSingleObject(process, 5000) == WAIT_OBJECT_0
         {
             Ok(true)
@@ -469,6 +633,7 @@ fn wide(value: impl AsRef<str>) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use leanshell_core::updater::swap;
 
     #[test]
     fn compares_versions_by_number() {
@@ -762,5 +927,39 @@ mod tests {
         );
         std::fs::remove_dir(blocked).unwrap();
         assert_unchanged(dir.path());
+    }
+
+    #[test]
+    fn apply_staged_dir_swaps_cross_folder_and_rolls_back_on_error() {
+        let root = test_dir();
+        let stage = root.path().join("stage");
+        let target = root.path().join("target");
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        seed_install(&target);
+        std::fs::write(target.join("leanshell-setup.exe"), b"old setup").unwrap();
+
+        std::fs::write(stage.join("leanshell.exe.new"), b"new launcher").unwrap();
+        std::fs::write(stage.join("leanshell-settings.exe.new"), b"new settings").unwrap();
+        std::fs::write(stage.join("leanshell-setup.exe.new"), b"new setup").unwrap();
+
+        apply_staged_dir(&stage, &target).unwrap();
+        assert_eq!(std::fs::read(target.join("leanshell.exe")).unwrap(), b"new launcher");
+        assert_eq!(
+            std::fs::read(target.join("leanshell-settings.exe")).unwrap(),
+            b"new settings"
+        );
+        assert_eq!(std::fs::read(target.join("leanshell-setup.exe")).unwrap(), b"new setup");
+        assert_eq!(
+            std::fs::read(target.join("leanshell.exe.old")).unwrap(),
+            b"old leanshell.exe"
+        );
+
+        rollback_dir(&target).unwrap();
+        assert_eq!(
+            std::fs::read(target.join("leanshell.exe")).unwrap(),
+            b"old leanshell.exe"
+        );
+        assert_eq!(std::fs::read(target.join("leanshell-setup.exe")).unwrap(), b"old setup");
     }
 }

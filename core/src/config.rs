@@ -101,6 +101,16 @@ pub enum PanelAlign {
     Left,
 }
 
+/// Automatic background update behavior for the installed shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoUpdateMode {
+    #[default]
+    Auto,
+    Notify,
+    Off,
+}
+
 /// Keys missing from the user's file take their value from `config-0.3.toml`,
 /// then from the default config.
 #[derive(Debug, Clone, Deserialize)]
@@ -157,6 +167,10 @@ pub struct Config {
     pub wm_borders: bool,
     #[serde(default = "default_wm_border_color")]
     pub wm_border_color: String,
+    #[serde(default)]
+    pub auto_update: AutoUpdateMode,
+    #[serde(default = "default_update_check_hours")]
+    pub update_check_hours: u32,
 }
 
 fn default_true() -> bool {
@@ -173,6 +187,10 @@ fn default_wm_gap() -> u32 {
 
 fn default_wm_border_color() -> String {
     "#0891B2".to_string()
+}
+
+fn default_update_check_hours() -> u32 {
+    6
 }
 
 /// Returns true if `value` is empty (meaning use theme colors) or a valid `#RRGGBB` / `#RRGGBBAA` hex color.
@@ -219,6 +237,7 @@ impl Config {
         config.max_results = config.max_results.clamp(1, 20);
         config.dock_icon_size = config.dock_icon_size.clamp(24, 40);
         config.wm_gap = config.wm_gap.min(32);
+        config.update_check_hours = config.update_check_hours.clamp(1, 168);
         let warning = config.drop_unusable_color();
         Ok((config, warning))
     }
@@ -400,5 +419,19 @@ mod tests {
         assert!(!custom.wm_borders);
         assert!(custom.drop_unusable_color().is_some());
         assert_eq!(custom.wm_border_color, "#0891B2");
+    }
+
+    #[test]
+    fn auto_update_and_check_hours_deserialize() {
+        let default = Config::default();
+        assert_eq!(default.auto_update, AutoUpdateMode::Auto);
+        assert_eq!(default.update_check_hours, 6);
+
+        let notify = Config::parse("auto_update = 'notify'\nupdate_check_hours = 24").unwrap();
+        assert_eq!(notify.auto_update, AutoUpdateMode::Notify);
+        assert_eq!(notify.update_check_hours, 24);
+
+        let off = Config::parse("auto_update = 'off'").unwrap();
+        assert_eq!(off.auto_update, AutoUpdateMode::Off);
     }
 }

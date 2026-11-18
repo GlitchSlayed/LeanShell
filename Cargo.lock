@@ -176,7 +176,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "leanshell"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "leanshell-core",
  "leanshell-platform-win",
@@ -184,6 +184,8 @@ dependencies = [
  "leanshell-ui-d2d",
  "nucleo-matcher",
  "serde",
+ "serde_json",
+ "sha2",
  "tempfile",
  "toml",
  "toml_edit",
@@ -192,20 +194,22 @@ dependencies = [
  "windows-core",
  "windows-numerics",
  "winresource",
+ "zip",
 ]
 
 [[package]]
 name = "leanshell-core"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "nucleo-matcher",
  "serde",
+ "tempfile",
  "toml",
 ]
 
 [[package]]
 name = "leanshell-platform-win"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "leanshell-core",
  "windows",
@@ -214,14 +218,14 @@ dependencies = [
 
 [[package]]
 name = "leanshell-render"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "leanshell-core",
 ]
 
 [[package]]
 name = "leanshell-settings"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "leanshell-core",
  "leanshell-platform-win",
@@ -239,8 +243,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "leanshell-setup"
+version = "0.0.14"
+dependencies = [
+ "leanshell-core",
+ "leanshell-platform-win",
+ "toml_edit",
+ "windows",
+ "windows-core",
+ "windows-numerics",
+ "winresource",
+ "zip",
+]
+
+[[package]]
 name = "leanshell-ui-d2d"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "leanshell-core",
  "leanshell-render",

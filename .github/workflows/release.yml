@@ -20,23 +20,34 @@ jobs:
           cache-all-crates: true
       - run: cargo test --workspace
       - run: cargo build --release -p leanshell -p leanshell-settings
+      - name: Build native setup installer (with embedded binaries)
+        shell: pwsh
+        run: |
+          $env:LEANSHELL_EMBED_DIR = (Resolve-Path target/release).Path
+          cargo build --release -p leanshell-setup
       - name: Package
         shell: pwsh
         run: |
           $name = "leanshell-${{ github.ref_name }}-x86_64-windows"
           New-Item -ItemType Directory $name | Out-Null
-          Copy-Item target/release/leanshell.exe, target/release/leanshell-settings.exe, README.md, LICENSE $name
+          Copy-Item target/release/leanshell.exe, target/release/leanshell-settings.exe, target/release/leanshell-setup.exe, README.md, LICENSE $name
           Compress-Archive "$name/*" "$name.zip"
-          # Standalone exes are for built-in updaters and direct execution.
+          # Standalone exes are for direct install and built-in auto-updaters.
           Copy-Item target/release/leanshell.exe "leanshell-${{ github.ref_name }}-x86_64.exe"
           Copy-Item target/release/leanshell-settings.exe "leanshell-settings-${{ github.ref_name }}-x86_64.exe"
-          $files = "$name.zip", "leanshell-${{ github.ref_name }}-x86_64.exe", "leanshell-settings-${{ github.ref_name }}-x86_64.exe"
+          Copy-Item target/release/leanshell-setup.exe "leanshell-setup-${{ github.ref_name }}-x86_64.exe"
+          pwsh -File packaging/msix/build-msix.ps1 -Tag "${{ github.ref_name }}" -BinaryDir target/release -OutputDirectory msix-out
+          Copy-Item msix-out/LeanShell.appinstaller LeanShell.appinstaller
+          Copy-Item "msix-out/leanshell-${{ github.ref_name }}-x86_64.msix" "leanshell-${{ github.ref_name }}-x86_64.msix"
+          $files = "$name.zip", "leanshell-setup-${{ github.ref_name }}-x86_64.exe", "leanshell-${{ github.ref_name }}-x86_64.exe", "leanshell-settings-${{ github.ref_name }}-x86_64.exe", "leanshell-${{ github.ref_name }}-x86_64.msix"
           $files | ForEach-Object { (Get-FileHash $_ -Algorithm SHA256).Hash + "  $_" } | Out-File -Encoding ascii SHA256SUMS.txt
       - name: Generate package manifests
         shell: pwsh
         run: |
           ./packaging/winget/generate.ps1 -Tag "${{ github.ref_name }}" `
-            -ZipPath "leanshell-${{ github.ref_name }}-x86_64-windows.zip" -OutputDirectory manifests
+            -ZipPath "leanshell-${{ github.ref_name }}-x86_64-windows.zip" `
+            -SetupExePath "leanshell-setup-${{ github.ref_name }}-x86_64.exe" `
+            -OutputDirectory manifests
       - name: Upload package manifests
         uses: actions/upload-artifact@v4
         with:
@@ -57,7 +68,7 @@ jobs:
           $pulls = gh api "repos/${{ github.repository }}/releases/generate-notes" `
             -f tag_name="${{ github.ref_name }}" --jq .body
           $pulls = $pulls -join "`n"
-          $download = '**Download `leanshell-${{ github.ref_name }}-x86_64-windows.zip`**, extract it and run `leanshell.exe`.'
+          $download = '**Download `leanshell-setup-${{ github.ref_name }}-x86_64.exe`** for native Windows 11 installation (or `leanshell-${{ github.ref_name }}-x86_64-windows.zip` for portable use).'
           "$download`n`n$section`n`n<details>`n<summary>Pull requests</summary>`n`n$pulls`n`n</details>`n" |
             Out-File -Encoding utf8 notes.md
       - name: Publish
@@ -73,16 +84,22 @@ jobs:
           $releaseExists = gh release view "${{ github.ref_name }}" 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload "${{ github.ref_name }}" `
+              "leanshell-setup-${{ github.ref_name }}-x86_64.exe" `
               "leanshell-${{ github.ref_name }}-x86_64-windows.zip" `
               "leanshell-${{ github.ref_name }}-x86_64.exe" `
               "leanshell-settings-${{ github.ref_name }}-x86_64.exe" `
+              "leanshell-${{ github.ref_name }}-x86_64.msix" `
+              LeanShell.appinstaller `
               SHA256SUMS.txt --clobber
             gh release edit "${{ github.ref_name }}" --title "$title" --notes-file notes.md
           } else {
             gh release create "${{ github.ref_name }}" `
+              "leanshell-setup-${{ github.ref_name }}-x86_64.exe" `
               "leanshell-${{ github.ref_name }}-x86_64-windows.zip" `
               "leanshell-${{ github.ref_name }}-x86_64.exe" `
               "leanshell-settings-${{ github.ref_name }}-x86_64.exe" `
+              "leanshell-${{ github.ref_name }}-x86_64.msix" `
+              LeanShell.appinstaller `
               SHA256SUMS.txt `
               --title "$title" --notes-file notes.md
           }

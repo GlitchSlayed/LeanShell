@@ -114,3 +114,11 @@ wm_borders = true
 # Focused window DWM border color as #RRGGBB (empty uses system default).
 wm_border_color = "#0891B2"
 
+# Automatic background update mode: "auto" (download, verify SHA-256, and hot-restart when idle),
+# "notify" (surface available update in launcher and settings), or "off".
+auto_update = "auto"
+
+# Hours between background GitHub release checks when auto_update is enabled (1 to 168).
+update_check_hours = 6
+
+

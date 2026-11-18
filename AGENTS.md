@@ -23,6 +23,8 @@ platform-win/  HWND, AppBar, blur, hotkeys and hooks, tray host, shell/IFEO/reap
 render/        Renderer trait and frame description types
 ui-d2d/        Direct2D renderer (sole UI layer across launcher, dock, OSDs, flyouts, WM overlays)
 settings/      native Win32 + Direct2D settings and onboarding app
+setup/         native Win32 + Direct2D setup installer, uninstaller, and elevated swap helper
+packaging/     WinGet manifests and Windows 11 MSIX + .appinstaller packaging
 bench/         benchmarks, baselines, methodology
 scripts/       install-nightly, restore-shell, measurement scripts
 ```

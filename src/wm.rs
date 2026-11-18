@@ -1098,6 +1098,10 @@ impl WindowManager {
         mgr
     }
 
+    pub fn switcher_visible(&self) -> bool {
+        SWITCHER_STATE.with(|cell| cell.borrow().as_ref().is_some_and(|s| s.visible))
+    }
+
     fn resolve_border_color(config: &Config) -> Option<u32> {
         if config.wm_border_color.trim().is_empty() {
             None

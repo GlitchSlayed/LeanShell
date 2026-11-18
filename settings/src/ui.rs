@@ -819,6 +819,7 @@ impl SettingsApp {
                     "max_results" => self.config.max_results,
                     "dock_icon_size" => self.config.dock_icon_size,
                     "wm_gap" => self.config.wm_gap,
+                    "update_check_hours" => self.config.update_check_hours,
                     _ => min,
                 };
                 let next = (current + delta).clamp(min, max);
@@ -2382,6 +2383,21 @@ unsafe fn draw_page_content(
             }
             Page::About => {
                 l.heading(&format!("About {}", crate::channel::NAME), &app.update_status);
+                l.choices(
+                    "Automatic Updates",
+                    "Download and hot-restart when idle (auto), notify in launcher/settings, or turn off.",
+                    &app.config.auto_update,
+                    "auto_update",
+                    &[("auto", "Auto"), ("notify", "Notify"), ("off", "Off")],
+                );
+                l.stepper(
+                    "Update Check Interval",
+                    "Hours between background GitHub release checks (1 to 168).",
+                    app.config.update_check_hours,
+                    "h",
+                    "update_check_hours",
+                    1..=168,
+                );
                 if app.update_installed_restart {
                     l.button_row(
                         "Update Ready",

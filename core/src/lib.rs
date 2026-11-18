@@ -14,6 +14,7 @@ pub mod model;
 pub mod reaper;
 pub mod search;
 pub mod startup_cmd;
+pub mod updater;
 pub mod wm;
 
 pub use calc::{evaluate as eval_calc, format as format_calc};

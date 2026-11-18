@@ -2,9 +2,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use windows::Win32::Foundation::*;
@@ -29,7 +30,7 @@ use crate::history::History;
 use crate::indexer::{AppEntry, IconPixels, IndexEvent, Indexer};
 use crate::messages::{
     WM_APP_COMMANDS, WM_APP_FILES, WM_APP_FRAME, WM_APP_INDEX, WM_APP_QUIT, WM_APP_RELOAD, WM_APP_SHOW, WM_APP_TOGGLE,
-    WM_EXPLORER_REAP_CHECK, WM_FOREGROUND_CHANGED, WM_SHELL_CHORD, WM_WM_ACTION, WM_WM_MOVESIZE,
+    WM_APP_UPDATE_READY, WM_EXPLORER_REAP_CHECK, WM_FOREGROUND_CHANGED, WM_SHELL_CHORD, WM_WM_ACTION, WM_WM_MOVESIZE,
 };
 use crate::render::{Frame, Renderer, SurfaceFrame, layout};
 use crate::search::{self, Action, Drill, FileScope, Kind, ResultItem, Searcher};
@@ -61,6 +62,25 @@ const TASKBAR_ATTEMPTS: u32 = 5;
 /// Debounces on-demand `explorer.exe` reaping after folder windows close.
 const EXPLORER_REAP_TIMER: usize = 5;
 const EXPLORER_REAP_MS: u32 = 1500;
+/// Periodic GitHub release check timer for built-in auto-updates.
+const UPDATE_CHECK_TIMER: usize = 7;
+const UPDATE_STARTUP_DELAY_MS: u32 = 45_000;
+
+enum UpdateOutcome {
+    Ready {
+        release: crate::update::Release,
+        staged: Option<(PathBuf, PathBuf)>,
+    },
+    UpToDate {
+        manual: bool,
+    },
+    Failed {
+        message: String,
+        manual: bool,
+    },
+}
+
+static UPDATE_RESULT: Mutex<Option<UpdateOutcome>> = Mutex::new(None);
 /// File results shown after apps, and for a query that starts with `?`.
 const MIXED_FILE_RESULTS: usize = 5;
 const ONLY_FILE_RESULTS: usize = 30;
@@ -316,6 +336,10 @@ pub fn run() -> Result<()> {
             outline: None,
             previous_foreground: HWND::default(),
             previous_target: None,
+            hot_restart: false,
+            pending_update: None,
+            staged_handoff: None,
+            update_busy: false,
         };
         LAUNCHER.with(|cell| *cell.borrow_mut() = Some(launcher));
         with_launcher(|l| {
@@ -505,6 +529,10 @@ struct Launcher {
     outline: Option<RECT>,
     previous_foreground: HWND,
     previous_target: Option<commands::open_windows::Target>,
+    hot_restart: bool,
+    pending_update: Option<crate::update::Release>,
+    staged_handoff: Option<(PathBuf, PathBuf)>,
+    update_busy: bool,
 }
 
 struct Morph {
@@ -558,6 +586,147 @@ impl Launcher {
         }
         self.indexer.rescan();
         self.last_scan = Instant::now();
+        crate::update::remove_old_files();
+        self.schedule_update_timer(true);
+    }
+
+    fn schedule_update_timer(&self, initial: bool) {
+        if crate::util::perf::hook_on("WISP_CAPTURE") || crate::channel::NIGHTLY {
+            return;
+        }
+        // SAFETY: Manages single periodic timer owned by the launcher HWND.
+        unsafe {
+            if self.config.auto_update == config::AutoUpdateMode::Off {
+                let _ = KillTimer(Some(self.hwnd), UPDATE_CHECK_TIMER);
+            } else {
+                let ms = if initial {
+                    UPDATE_STARTUP_DELAY_MS
+                } else {
+                    self.config.update_check_hours.clamp(1, 168) * 3_600_000
+                };
+                SetTimer(Some(self.hwnd), UPDATE_CHECK_TIMER, ms, None);
+            }
+        }
+    }
+
+    fn start_background_update_check(&mut self, manual: bool, auto_stage: bool) {
+        if self.update_busy || crate::channel::NIGHTLY {
+            return;
+        }
+        if let Some(manager) = crate::install::current_manager() {
+            if manual {
+                tray::notify(self.hwnd, crate::channel::NAME, manager.instruction(), false);
+            }
+            return;
+        }
+        self.update_busy = true;
+        let hwnd_raw = self.hwnd.0 as isize;
+        std::thread::spawn(move || {
+            let outcome = match crate::update::check() {
+                Ok(Some(release)) => {
+                    if auto_stage {
+                        match crate::update::stage_for_self_handoff(&release) {
+                            Ok(paths) => UpdateOutcome::Ready {
+                                release,
+                                staged: Some(paths),
+                            },
+                            Err(message) => UpdateOutcome::Failed { message, manual },
+                        }
+                    } else {
+                        UpdateOutcome::Ready { release, staged: None }
+                    }
+                }
+                Ok(None) => UpdateOutcome::UpToDate { manual },
+                Err(message) => UpdateOutcome::Failed { message, manual },
+            };
+            if let Ok(mut slot) = UPDATE_RESULT.lock() {
+                *slot = Some(outcome);
+            }
+            // SAFETY: Posts notification to the launcher HWND on the message loop thread.
+            unsafe {
+                let _ = PostMessageW(
+                    Some(HWND(hwnd_raw as *mut core::ffi::c_void)),
+                    WM_APP_UPDATE_READY,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
+            }
+        });
+    }
+
+    fn handle_update_ready(&mut self) {
+        self.update_busy = false;
+        let outcome = UPDATE_RESULT.lock().ok().and_then(|mut s| s.take());
+        let Some(outcome) = outcome else {
+            return;
+        };
+        match outcome {
+            UpdateOutcome::Ready {
+                release,
+                staged: Some((stage_dir, target_dir)),
+                ..
+            } => {
+                self.pending_update = Some(release);
+                if !self.visible && !self.wm.switcher_visible() {
+                    self.launch_handoff_and_quit(stage_dir, target_dir);
+                } else {
+                    self.staged_handoff = Some((stage_dir, target_dir));
+                }
+            }
+            UpdateOutcome::Ready {
+                release, staged: None, ..
+            } => {
+                let msg = format!(
+                    "LeanShell {} is available. Run \"update\" in the launcher or open Settings -> About to install.",
+                    release.version()
+                );
+                tray::notify(self.hwnd, "LeanShell update available", &msg, false);
+                self.pending_update = Some(release);
+            }
+            UpdateOutcome::UpToDate { manual: true } => {
+                tray::notify(
+                    self.hwnd,
+                    crate::channel::NAME,
+                    &format!("LeanShell {} is up to date.", env!("CARGO_PKG_VERSION")),
+                    false,
+                );
+            }
+            UpdateOutcome::UpToDate { manual: false } => {}
+            UpdateOutcome::Failed { message, manual } => {
+                if manual {
+                    tray::notify(self.hwnd, "Update failed", &message, true);
+                }
+            }
+        }
+    }
+
+    fn launch_handoff_and_quit(&mut self, stage_dir: PathBuf, target_dir: PathBuf) {
+        let Ok(current) = std::env::current_exe() else {
+            return;
+        };
+        let pid = std::process::id();
+        let handoff_exe = std::env::temp_dir().join(format!("leanshell-handoff-{pid}.exe"));
+        if std::fs::copy(&current, &handoff_exe).is_err() {
+            return;
+        }
+        if std::process::Command::new(&handoff_exe)
+            .args([
+                "--handoff-update",
+                &stage_dir.to_string_lossy(),
+                "--target-dir",
+                &target_dir.to_string_lossy(),
+                "--parent-pid",
+                &pid.to_string(),
+            ])
+            .spawn()
+            .is_ok()
+        {
+            self.hot_restart = true;
+            // SAFETY: Self-quit with WPARAM(1) triggers zero-taskbar-flash hot-restart shutdown.
+            unsafe {
+                let _ = PostMessageW(Some(self.hwnd), WM_APP_QUIT, WPARAM(1), LPARAM(0));
+            }
+        }
     }
 
     fn sync_win_key_hook(&mut self) {
@@ -701,6 +870,7 @@ impl Launcher {
         self.wm
             .sync_config(&self.config, self.palette, self.dark, config::dock_tint(&self.config));
         self.register_hotkey(true);
+        self.schedule_update_timer(false);
     }
 
     /// Hides or restores the Windows taskbar and creates or removes the dock
@@ -1071,6 +1241,9 @@ impl Launcher {
         {
             dock.show();
         }
+        if let Some((stage_dir, target_dir)) = self.staged_handoff.take() {
+            self.launch_handoff_and_quit(stage_dir, target_dir);
+        }
     }
 
     /// Uses the monitor under the cursor, or the dock's chosen screen when the
@@ -1409,6 +1582,22 @@ impl Launcher {
             return;
         }
         self.base_results = commands::search(self.editor.text(), &self.command_state);
+        if let Some(release) = &self.pending_update {
+            let q = self.editor.text().trim().to_ascii_lowercase();
+            if q.is_empty() || "update".starts_with(&q) || "upgrade".starts_with(&q) {
+                self.base_results.insert(
+                    0,
+                    ResultItem::new(
+                        Kind::Command,
+                        format!("Update LeanShell to {}", release.version()),
+                        "Download verified release and hot-restart cleanly",
+                        Action::Command(Command::UpdateNow),
+                    )
+                    .glyph(commands::glyph::SETTINGS)
+                    .verb("Update"),
+                );
+            }
+        }
         self.base_results.extend(commands::open_windows::target_items(
             self.editor.text(),
             self.previous_target.as_ref(),
@@ -1640,6 +1829,21 @@ impl Launcher {
             Command::WispSettings => {
                 let _ = launch::settings(false);
                 self.hide();
+                return;
+            }
+            Command::UpdateNow => {
+                self.hide();
+                if let Some((stage_dir, target_dir)) = self.staged_handoff.take() {
+                    self.launch_handoff_and_quit(stage_dir, target_dir);
+                } else {
+                    tray::notify(
+                        self.hwnd,
+                        crate::channel::NAME,
+                        "Checking for LeanShell updates...",
+                        false,
+                    );
+                    self.start_background_update_check(true, true);
+                }
                 return;
             }
             Command::WmToggleTiling => {
@@ -2662,10 +2866,14 @@ impl Launcher {
         self.wm.shutdown();
         self.reap_hook = None;
         self.dock = None;
+        // SAFETY: Clears background timers owned by launcher HWND on teardown.
         unsafe {
             let _ = KillTimer(Some(self.hwnd), EXPLORER_REAP_TIMER);
+            let _ = KillTimer(Some(self.hwnd), UPDATE_CHECK_TIMER);
         }
-        if let Err(e) = TaskbarHider::configure(&mut self.taskbar, self.hwnd, false, false) {
+        if self.hot_restart {
+            TaskbarHider::disarm_for_hot_restart(&mut self.taskbar);
+        } else if let Err(e) = TaskbarHider::configure(&mut self.taskbar, self.hwnd, false, false) {
             eprintln!("could not restore the taskbar: {e}");
         }
         // Removed last, so Windows works the work area out again from the
@@ -2679,7 +2887,9 @@ impl Launcher {
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_RECOVERY);
         }
         tray::remove(self.hwnd);
-        taskbar::emergency_restore();
+        if !self.hot_restart {
+            taskbar::emergency_restore();
+        }
     }
 }
 
@@ -2980,9 +3190,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_TIMER if wparam.0 == 99 && crate::util::perf::hook_on("WISP_CAPTURE") => unsafe {
             let _ = DestroyWindow(hwnd);
         },
-        WM_APP_QUIT => unsafe {
-            let _ = DestroyWindow(hwnd);
-        },
+        WM_APP_QUIT => {
+            if wparam.0 == 1 {
+                with_launcher(|l| l.hot_restart = true);
+            }
+            // SAFETY: Triggers shutdown and clean teardown on WM_APP_QUIT.
+            unsafe {
+                let _ = DestroyWindow(hwnd);
+            }
+        }
+        WM_APP_UPDATE_READY => {
+            with_launcher(Launcher::handle_update_ready);
+        }
         WM_APP_RELOAD => {
             with_launcher(|l| {
                 l.reload_config_if_changed();
@@ -3233,6 +3452,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             with_launcher(|l| {
                 leanshell_platform_win::reap_idle_explorer(l.config.auto_reap_explorer);
+            });
+        }
+        WM_TIMER if wparam.0 == UPDATE_CHECK_TIMER => {
+            with_launcher(|l| {
+                l.schedule_update_timer(false);
+                let auto_stage = l.config.auto_update == config::AutoUpdateMode::Auto;
+                if l.config.auto_update != config::AutoUpdateMode::Off {
+                    l.start_background_update_check(false, auto_stage);
+                }
             });
         }
         WM_ENDSESSION if wparam.0 != 0 => taskbar::emergency_restore(),

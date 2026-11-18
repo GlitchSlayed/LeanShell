@@ -42,6 +42,8 @@ pub struct Config {
     pub wm_gap: i64,
     pub wm_borders: bool,
     pub wm_border_color: String,
+    pub auto_update: String,
+    pub update_check_hours: i64,
 }
 
 impl Default for Config {
@@ -102,6 +104,13 @@ impl Config {
         let wm_borders = boolean("wm_borders").unwrap_or(true);
         let wm_border_color = string("wm_border_color").unwrap_or_else(|_| "#0891B2".into());
         validate_color(&wm_border_color)?;
+        let auto_update = string("auto_update").unwrap_or_else(|_| "auto".into());
+        choice(&auto_update, &["auto", "notify", "off"], "auto_update")?;
+        let update_check_hours = get("update_check_hours")
+            .as_integer()
+            .filter(|value| *value >= 1)
+            .ok_or("update_check_hours must be a positive whole number of hours.")?
+            .clamp(1, 168);
         let dock_icon_size = get("dock_icon_size")
             .as_integer()
             .filter(|value| *value >= 0)
@@ -159,6 +168,8 @@ impl Config {
             wm_gap,
             wm_borders,
             wm_border_color,
+            auto_update,
+            update_check_hours,
         })
     }
 }
@@ -364,9 +375,15 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
             return Err("wm_borders must be true or false.".into());
         }
         "wm_border_color" => validate_color(value.as_str().ok_or("Border color must be text.")?)?,
+        "auto_update" if !matches!(value.as_str(), Some("auto" | "notify" | "off")) => {
+            return Err("auto_update must be auto, notify or off.".into());
+        }
+        "update_check_hours" if !value.as_integer().is_some_and(|hrs| (1..=168).contains(&hrs)) => {
+            return Err("Choose a check interval between 1 and 168 hours.".into());
+        }
         "window_list" | "display_mode" | "panel_edge" | "panel_align" | "shell_mode" | "watchdog" | "claim_win_key"
         | "neuter_shell_hosts" | "auto_reap_explorer" | "claim_shell_chords" | "wm_enabled" | "wm_tiling"
-        | "wm_gap" | "wm_borders" => {}
+        | "wm_gap" | "wm_borders" | "auto_update" | "update_check_hours" => {}
         _ => return Err(format!("Unknown setting: {key}")),
     }
     Ok(())
@@ -411,6 +428,8 @@ mod tests {
         assert_eq!(config.wm_gap, 8);
         assert!(config.wm_borders);
         assert_eq!(config.wm_border_color, "#0891B2");
+        assert_eq!(config.auto_update, "auto");
+        assert_eq!(config.update_check_hours, 6);
         assert_eq!(Config::from_document(&DEFAULT_CONFIG.parse().unwrap()).unwrap(), config);
 
         // Legacy Slint renderer keys in user configs are ignored cleanly.

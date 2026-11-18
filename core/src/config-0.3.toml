@@ -19,4 +19,6 @@ wm_tiling = false
 wm_gap = 8
 wm_borders = true
 wm_border_color = "#0891B2"
+auto_update = "auto"
+update_check_hours = 6
 

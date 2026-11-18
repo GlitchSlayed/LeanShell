@@ -128,6 +128,8 @@ platform-win/  HWND, AppBar, blur, hotkeys and hooks, tray host, shell notificat
 render/        Renderer trait and frame description types
 ui-d2d/        Direct2D renderer (sole UI layer across all surfaces)
 settings/      Native Win32 + Direct2D settings app (`leanshell-settings`)
+setup/         Native Win32 + Direct2D Windows 11 installer & elevated updater (`leanshell-setup`)
+packaging/     WinGet manifests and Windows 11 MSIX + `.appinstaller` packaging templates
 bench/         Benchmarks, baselines, and performance methodology
 scripts/       install-nightly, restore-shell, measurement scripts
 docs/          VM testing instructions and internal Win32 API documentation
@@ -158,11 +160,11 @@ Because LeanShell performs deep shell takeover (Winlogon registration, input hoo
 - Every system mutation is **transactionally backed up** (`HKCU\Software\LeanShell\BackupShell`, `HKCU\Software\LeanShell\BackupIFEO`) and cleanly reversed by `--restore-shell` and `scripts\restore-shell.ps1`.
 - Holding **Shift** during logon triggers Safe Mode fallback, automatically reverting the Winlogon override and launching `explorer.exe`.
 - Any crash or exit automatically triggers restoration via the watchdog supervisor.
-- **CLI Flag Escape Hatch**:
+- **CLI Flag Escape Hatch & Updates**:
   ```powershell
   leanshell.exe --restore-shell
   ```
-  (Also available: `--neuter-hosts`, `--restore-hosts`, `--diagnose`)
+  (Also available: `--neuter-hosts`, `--restore-hosts`, `--diagnose`, `--check-update`, `--update`)
 - **Emergency Key Chord**: Press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Esc</kbd> at any time to immediately restore the taskbar and cleanly exit LeanShell.
 - **Manual PowerShell Recovery Script**:
   ```powershell

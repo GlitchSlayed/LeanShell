@@ -59,6 +59,8 @@ pub const WM_EXPLORER_REAP_CHECK: u32 = WM_APP + 62;
 pub const WM_WM_MOVESIZE: u32 = WM_APP + 63;
 /// Window management action request (`WPARAM`: 1 = Task View, 2 = Toggle Tiling, 3 = Retile).
 pub const WM_WM_ACTION: u32 = WM_APP + 64;
+/// Background auto-update check/stage result notification.
+pub const WM_APP_UPDATE_READY: u32 = WM_APP + 65;
 
 #[cfg(test)]
 mod tests {
@@ -98,6 +100,7 @@ mod tests {
             WM_EXPLORER_REAP_CHECK,
             WM_WM_MOVESIZE,
             WM_WM_ACTION,
+            WM_APP_UPDATE_READY,
         ];
         let mut sorted = all.to_vec();
         sorted.sort_unstable();

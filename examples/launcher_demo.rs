@@ -57,6 +57,9 @@ mod theme;
 mod tray;
 #[path = "../src/tray_host.rs"]
 mod tray_host;
+#[allow(dead_code)]
+#[path = "../settings/src/update.rs"]
+mod update;
 #[path = "../src/util.rs"]
 mod util;
 #[path = "../src/wm.rs"]

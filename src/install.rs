@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 pub enum Manager {
     Winget,
     Scoop,
+    Msix,
 }
 
 impl Manager {
@@ -14,6 +15,7 @@ impl Manager {
         match self {
             Self::Winget => "Installed with winget. Update with winget upgrade GlitchSlayed.LeanShell.",
             Self::Scoop => "Installed with Scoop. Update with scoop update leanshell.",
+            Self::Msix => "Installed with Windows App Installer (MSIX). Updates are managed by App Installer.",
         }
     }
 }
@@ -48,7 +50,32 @@ pub fn manager(
     if path.contains(r"\scoop\apps\") || scoop.is_some_and(|root| under(&path, root, "apps")) {
         return Some(Manager::Scoop);
     }
+    if path.contains(r"\windowsapps\") {
+        return Some(Manager::Msix);
+    }
     None
+}
+
+/// Default machine-wide installation folder (`C:\Program Files\LeanShell`).
+pub fn default_install_dir() -> PathBuf {
+    std::env::var_os("ProgramFiles")
+        .or_else(|| std::env::var_os("PROGRAMW6432"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"))
+        .join("LeanShell")
+}
+
+/// Probes whether the current process can create and remove files directly in `dir`.
+pub fn is_dir_writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".leanshell-write-probe-{}", std::process::id()));
+    match std::fs::OpenOptions::new().create_new(true).write(true).open(&probe) {
+        Ok(file) => {
+            drop(file);
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 pub fn current_manager() -> Option<Manager> {
@@ -160,5 +187,30 @@ mod tests {
         ] {
             assert_eq!(autostart_path(Path::new(path), scoop), PathBuf::from(path));
         }
+    }
+
+    #[test]
+    fn detects_msix_and_allows_program_files_leanshell_self_update() {
+        let local = Some(Path::new(r"C:\Users\Me\AppData\Local"));
+        let programs = Some(Path::new(r"C:\Program Files"));
+        assert_eq!(
+            manager(
+                Path::new(r"C:\Program Files\WindowsApps\GlitchSlayed.LeanShell_0.0.14.0_x64__abc\leanshell.exe"),
+                local,
+                programs,
+                None,
+            ),
+            Some(Manager::Msix)
+        );
+        // Native leanshell-setup.exe installs into Program Files\LeanShell and uses built-in auto-update.
+        assert_eq!(
+            manager(
+                Path::new(r"C:\Program Files\LeanShell\leanshell.exe"),
+                local,
+                programs,
+                None
+            ),
+            None
+        );
     }
 }

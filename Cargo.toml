@@ -1,6 +1,6 @@
 [package]
 name = "leanshell"
-version = "0.0.13"
+version = "0.0.14"
 edition = "2024"
 description = "A Windows 11 shell, dock, and launcher replacement with ~0% idle resource use"
 license = "MIT"
@@ -17,6 +17,7 @@ members = [
     "render",
     "ui-d2d",
     "settings",
+    "setup",
 ]
 
 [features]
@@ -32,10 +33,13 @@ leanshell-render = { path = "render" }
 leanshell-ui-d2d = { path = "ui-d2d" }
 nucleo-matcher = "0.3"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 toml = "1"
 windows-core = "0.62"
 windows-collections = "0.3"
 windows-numerics = "0.3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -69,6 +73,7 @@ features = [
     "Win32_NetworkManagement_Ndis",
     "Win32_NetworkManagement_WiFi",
     "Win32_Networking_NetworkListManager",
+    "Win32_Networking_WinHttp",
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
@@ -112,5 +117,7 @@ strip = true
 # Keep the launcher on the release profile above.
 [profile.release.package]
 leanshell-settings = { opt-level = "z" }
+leanshell-setup = { opt-level = "z" }
+serde_json = { opt-level = "z" }
 toml_edit = { opt-level = "z" }
 zip = { opt-level = "z" }

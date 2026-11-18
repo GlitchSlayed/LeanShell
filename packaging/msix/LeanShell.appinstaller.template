@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AppInstaller
+  xmlns="http://schemas.microsoft.com/appx/appinstaller/2018"
+  Uri="https://github.com/GlitchSlayed/LeanShell/releases/latest/download/LeanShell.appinstaller"
+  Version="@MSIX_VERSION@">
+
+  <MainPackage
+    Name="GlitchSlayed.LeanShell"
+    Version="@MSIX_VERSION@"
+    Publisher="@PUBLISHER@"
+    ProcessorArchitecture="x64"
+    Uri="https://github.com/GlitchSlayed/LeanShell/releases/download/v@VERSION@/leanshell-v@VERSION@-x86_64.msix" />
+
+  <UpdateSettings>
+    <OnLaunch HoursBetweenUpdateChecks="6" ShowPrompt="false" />
+    <AutomaticBackgroundTask />
+  </UpdateSettings>
+</AppInstaller>

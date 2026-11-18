@@ -103,10 +103,12 @@ pub enum Command {
     WmTaskView,
     /// Snap the previous foreground window in a direction.
     WmSnap(leanshell_core::SnapDirection),
-    /// Quits Wisp. The launcher handles it, so the worker never sees it.
+    /// Quits LeanShell. The launcher handles it, so the worker never sees it.
     Quit,
-    /// Opens Wisp's own Settings. The launcher handles it too.
+    /// Opens LeanShell's own Settings. The launcher handles it too.
     WispSettings,
+    /// Checks for and installs updates immediately. Handled by the launcher.
+    UpdateNow,
 }
 
 impl Command {
@@ -124,6 +126,7 @@ impl Command {
                 | Command::WmSnap(_)
                 | Command::Quit
                 | Command::WispSettings
+                | Command::UpdateNow
         )
     }
 }
@@ -261,6 +264,7 @@ fn worker(requests: Receiver<Request>, events: Sender<Event>, icon_size: i32, no
                             | Command::WmSnap(_)
                             | Command::Quit
                             | Command::WispSettings
+                            | Command::UpdateNow
                             | Command::RadioView(_)
                             | Command::RadioSelect(_) => Ok(()),
                         }
@@ -382,6 +386,7 @@ pub fn search(query: &str, state: &State) -> Vec<ResultItem> {
     items.extend(power_items(&query));
     items.extend(wm_items(&query));
     items.extend(wisp_settings_item(&query));
+    items.extend(update_item(&query));
     items.extend(quit_item(&query));
     items.extend(time_items(&words));
     for (title, link) in settings::find(&query) {
@@ -787,6 +792,22 @@ fn quit_item(query: &str) -> Option<ResultItem> {
         )
         .glyph(glyph::CLOSE)
         .verb("Quit")
+    })
+}
+
+fn update_item(query: &str) -> Option<ResultItem> {
+    let matches = query.chars().count() >= 3
+        && ["update", "check for updates", "upgrade", "update leanshell"]
+            .iter()
+            .any(|kw| kw.starts_with(query));
+    matches.then(|| {
+        row(
+            format!("Check for {} Updates", crate::channel::NAME),
+            "Download, verify SHA-256, and hot-restart if newer",
+            Action::Command(Command::UpdateNow),
+        )
+        .glyph(glyph::SETTINGS)
+        .verb("Update")
     })
 }
 

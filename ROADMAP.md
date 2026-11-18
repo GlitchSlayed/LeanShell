@@ -202,11 +202,12 @@ Theme files, TOML surfaces and widgets (clock, CPU, media, workspaces), config h
 - Implemented `--diagnose` CLI command: inspects live session ownership (`GetShellWindow`), Winlogon registry registration, backup shell, IFEO host neutering status, active taskbars, and monitor work areas.
 - Coordinated shell recovery via `--restore-shell` and watchdog supervisor.
 
-### T9: Packaging, signing, security
+### T9: Packaging, signing, auto-update & security (Native Setup, MSIX & Auto-Updater Implemented)
 
-- Portable zip plus installer, user-initiated updates, optional elevated setup/takeover helper for IFEO/services/NTFS operations while keeping the interactive shell un-elevated by default where appropriate (or scoped privilege separation so launched apps inherit expected user tokens).
-- Code signing to avoid SmartScreen warnings.
-- Accessibility: UI Automation, high contrast, IME, per-monitor DPI.
+- **Native Win32 + Direct2D Setup (`setup/` → `leanshell-setup.exe`):** Machine-wide `%ProgramFiles%\LeanShell` installer with UAC elevation, Windows 11 Installed Apps (`HKLM\...\Uninstall\LeanShell`), Start Menu shortcuts, WinGet `--silent` / `--uninstall` flags, optional Exclusive Shell + IFEO host neutering, and un-elevated desktop launch (`explorer.exe`).
+- **Windows 11 MSIX + `.appinstaller` (`packaging/msix/`):** `runFullTrust` + `allowElevation` MSIX manifest, `.appinstaller` XML auto-update descriptor, and `build-msix.ps1`.
+- **Built-In Background Auto-Updater (`core/src/updater.rs`, `settings/src/update.rs`, `src/app.rs`):** Configurable `auto_update = "auto" | "notify" | "off"` + `update_check_hours`, SHA-256 verification, zero-taskbar-flash hot restart (`WM_APP_QUIT` `WPARAM(1)` + `disarm_for_hot_restart`), `%TEMP%` self-handoff + elevated `--apply-staged-update`, and automatic `.old` rollback if the new binary exits early.
+- **Future Hardening:** EV/OV Authenticode signing for SmartScreen reputation, UI Automation tree exposure, high contrast, IME polish.
 
 ## Resolved Design Decisions
 

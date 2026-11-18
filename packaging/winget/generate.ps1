@@ -9,7 +9,8 @@ pwsh -File packaging/winget/generate.ps1 -Tag v0.0.1 -ZipPath ./leanshell-v0.0.1
 param(
     [Parameter(Mandatory)][ValidatePattern('^v\d+\.\d+\.\d+$')][string] $Tag,
     [Parameter(Mandatory)][string] $ZipPath,
-    [Parameter(Mandatory)][string] $OutputDirectory
+    [Parameter(Mandatory)][string] $OutputDirectory,
+    [string] $SetupExePath
 )
 $ErrorActionPreference = 'Stop'
 $version = $Tag.Substring(1)
@@ -70,20 +71,38 @@ ManifestType: defaultLocale
 ManifestVersion: 1.10.0
 "@ | Set-Content -Encoding utf8 (Join-Path $winget 'GlitchSlayed.LeanShell.locale.en-US.yaml')
 
+$setupInstallerBlock = ''
+if ($SetupExePath -and (Test-Path -LiteralPath $SetupExePath)) {
+    $setupUrl = "$repo/releases/download/$Tag/leanshell-setup-$Tag-x86_64.exe"
+    $setupSha256 = (Get-FileHash -LiteralPath $SetupExePath -Algorithm SHA256).Hash
+    $setupInstallerBlock = @"
+- Architecture: x64
+  Scope: machine
+  InstallerType: exe
+  InstallerUrl: $setupUrl
+  InstallerSha256: $setupSha256
+  InstallerSwitches:
+    Silent: --silent
+    SilentWithProgress: --silent
+
+"@
+}
+
 @"
 # yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
 PackageIdentifier: GlitchSlayed.LeanShell
 PackageVersion: $version
 MinimumOSVersion: 10.0.19041.0
-InstallerType: zip
-NestedInstallerType: portable
-NestedInstallerFiles:
-- RelativeFilePath: ${prefix}leanshell.exe
-  PortableCommandAlias: leanshell
-- RelativeFilePath: ${prefix}leanshell-settings.exe
-  PortableCommandAlias: leanshell-settings
 Installers:
-- Architecture: x64
+${setupInstallerBlock}- Architecture: x64
+  Scope: user
+  InstallerType: zip
+  NestedInstallerType: portable
+  NestedInstallerFiles:
+  - RelativeFilePath: ${prefix}leanshell.exe
+    PortableCommandAlias: leanshell
+  - RelativeFilePath: ${prefix}leanshell-settings.exe
+    PortableCommandAlias: leanshell-settings
   InstallerUrl: $url
   InstallerSha256: $sha256
 ManifestType: installer

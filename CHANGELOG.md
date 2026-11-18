@@ -2,6 +2,21 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.14 - 2026-11-17
+
+### Native Windows 11 Installer, MSIX AppInstaller & Zero-Flash Auto-Updater
+
+- **Native Win32 + Direct2D Setup Installer (`setup/` → `leanshell-setup.exe`)**:
+  - Built a standalone native Win32 + Direct2D installer/uninstaller supporting UAC elevation into `C:\Program Files\LeanShell`, optional embedded binary payloads during release builds (`LEANSHELL_EMBED_DIR`), Start Menu shortcuts, Windows 11 **Installed Apps** registration (`HKLM\...\Uninstall\LeanShell`), interactive shell/IFEO toggles, and non-elevated `leanshell.exe` launch on completion.
+  - Added silent automation modes (`--silent` / `/S` / `--uninstall --silent`) for WinGet plus atomic `--apply-staged-update` elevation support and complete `--restore-shell` cleanup on uninstall.
+- **Windows 11 MSIX & `.appinstaller` + WinGet Support (`packaging/msix/`, `packaging/winget/`)**:
+  - Added Windows 11 Desktop Bridge `AppxManifest.xml.template` (`runFullTrust` + `allowElevation` + `StartupTask` + execution aliases), `LeanShell.appinstaller.template`, and `packaging/msix/build-msix.ps1` (`MakeAppx` + optional `SignTool` / `-SelfSign`).
+  - Updated `packaging/winget/generate.ps1` and `.github/workflows/release.yml` to publish `leanshell-setup-<tag>-x86_64.exe`, `leanshell-<tag>-x86_64.msix`, and `LeanShell.appinstaller` alongside portable assets and checksums.
+- **Built-In Background Auto-Updater & Zero-Taskbar-Flash Hot Restart (`core/src/updater.rs`, `settings/src/update.rs`, `src/app.rs`, `src/taskbar.rs`)**:
+  - Added `auto_update = "auto" | "notify" | "off"` and `update_check_hours = 6` (`1..=168`) across `config.toml`, `leanshell-core`, and `leanshell-settings`, plus `--check-update`, `--update`, and launcher `update` command support.
+  - Added background release check & SHA-256 verification, `%TEMP%` self-handoff with elevated `--apply-staged-update` fallback when updating `C:\Program Files\LeanShell`, 1500 ms post-restart health check with automatic `.old` rollback on early failure, and `WM_APP_QUIT (WPARAM=1)` + `TaskbarHider::disarm_for_hot_restart` to swap builds without flashing the stock Explorer taskbar.
+  - Updated `src/install.rs` to recognize `WindowsApps` MSIX packages while keeping `C:\Program Files\LeanShell` enabled for built-in auto-updates.
+
 ## 0.0.13 - 2026-11-17
 
 ### Hybrid Window Manager, Shell Host Neutering & 100% Native Direct2D

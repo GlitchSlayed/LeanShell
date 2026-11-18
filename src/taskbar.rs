@@ -868,6 +868,29 @@ impl TaskbarHider {
         println!("restored snapshot: ABM_GETSTATE={}", appbar_state());
         Ok(())
     }
+
+    /// Disarms the crash watchdog and WinEvent hook during an in-place update hot restart
+    /// without showing or restoring the stock Explorer taskbar.
+    pub fn disarm_for_hot_restart(slot: &mut Option<Self>) {
+        let Some(mut hider) = slot.take() else {
+            return;
+        };
+        ACTIVE.store(false, Ordering::SeqCst);
+        if !hider.hook.is_invalid() {
+            // SAFETY: Unhooks our WinEvent hook on the owning message-loop thread.
+            unsafe {
+                let _ = UnhookWinEvent(hider.hook);
+            }
+            hider.hook = HWINEVENTHOOK::default();
+        }
+        if let Some(watchdog) = &mut hider.watchdog {
+            let _ = watchdog.disarm();
+        }
+        hider.watchdog = None;
+        hider.restored = true;
+        *RECOVERY.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        TARGET.store(0, Ordering::SeqCst);
+    }
 }
 
 impl Drop for TaskbarHider {
@@ -1072,6 +1095,71 @@ pub fn dispatch_cli() -> bool {
         print_diagnostics();
         return true;
     }
+    if args.iter().any(|a| a == "--check-update") {
+        match crate::update::check() {
+            Ok(Some(release)) => println!("Update available: {} ({})", release.tag, release.page),
+            Ok(None) => println!("LeanShell {} is up to date.", env!("CARGO_PKG_VERSION")),
+            Err(e) => eprintln!("Update check failed: {e}"),
+        }
+        return true;
+    }
+    if args.iter().any(|a| a == "--update") {
+        if let Some(manager) = crate::install::current_manager() {
+            println!("{}", manager.instruction());
+            return true;
+        }
+        match crate::update::check() {
+            Ok(Some(release)) => {
+                println!("Installing LeanShell {}...", release.tag);
+                if let Err(e) = crate::update::install(&release) {
+                    eprintln!("Update failed: {e}");
+                    std::process::exit(1);
+                }
+                println!("LeanShell updated cleanly to {}.", release.tag);
+            }
+            Ok(None) => println!("LeanShell {} is already up to date.", env!("CARGO_PKG_VERSION")),
+            Err(e) => {
+                eprintln!("Update check failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        return true;
+    }
+    if let Some(stage_dir) = arg_value(&args, "--apply-staged-update") {
+        let target_dir = arg_value(&args, "--target-dir").unwrap_or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()))
+                .unwrap_or_default()
+        });
+        if let Err(e) =
+            crate::update::apply_staged_dir(std::path::Path::new(&stage_dir), std::path::Path::new(&target_dir))
+        {
+            eprintln!("Apply staged update failed: {e}");
+            std::process::exit(1);
+        }
+        return true;
+    }
+    if let Some(stage_dir) = arg_value(&args, "--handoff-update") {
+        let target_dir = arg_value(&args, "--target-dir").unwrap_or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()))
+                .unwrap_or_default()
+        });
+        let parent_pid = arg_value(&args, "--parent-pid")
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+        if let Err(e) = crate::update::execute_handoff_update(
+            std::path::Path::new(&stage_dir),
+            std::path::Path::new(&target_dir),
+            parent_pid,
+        ) {
+            eprintln!("Handoff update failed: {e}");
+            std::process::exit(1);
+        }
+        return true;
+    }
     if args.get(1).map(String::as_str) == Some("--taskbar-watchdog") {
         if let Err(error) = watchdog_args(&args[2..]) {
             eprintln!("Taskbar watchdog: {error}");
@@ -1079,6 +1167,10 @@ pub fn dispatch_cli() -> bool {
         return true;
     }
     false
+}
+
+fn arg_value(args: &[String], flag: &str) -> Option<String> {
+    args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone())
 }
 
 fn watchdog_args(args: &[String]) -> Result<()> {
