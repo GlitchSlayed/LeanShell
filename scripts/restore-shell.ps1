@@ -19,13 +19,13 @@ $env:LIB = ""
 $env:INCLUDE = ""
 
 
-Write-Host "==> [1/4] Terminating LeanShell / Wisp processes (releases WH_KEYBOARD_LL hooks)..." -ForegroundColor Cyan
+Write-Host "==> [1/5] Terminating LeanShell / Wisp processes (releases WH_KEYBOARD_LL hooks)..." -ForegroundColor Cyan
 Get-Process -Name "leanshell", "leanshell-nightly", "wisp", "wisp-nightly" -ErrorAction SilentlyContinue | ForEach-Object {
     Write-Host "    Killing process $($_.Name) (PID: $($_.Id))" -ForegroundColor Yellow
     Stop-Process -Id $_.Id -Force
 }
 
-Write-Host "==> [2/4] Restoring user Winlogon shell registry value..." -ForegroundColor Cyan
+Write-Host "==> [2/5] Restoring user Winlogon shell registry value..." -ForegroundColor Cyan
 $winlogonKey = "HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon"
 if (Test-Path $winlogonKey) {
     $currentShell = (Get-ItemProperty -Path $winlogonKey -Name "Shell" -ErrorAction SilentlyContinue).Shell
@@ -39,7 +39,47 @@ if (Test-Path $winlogonKey) {
     Write-Host "    Winlogon key does not exist in HKCU (default behavior intact)." -ForegroundColor Green
 }
 
-Write-Host "==> [3/4] Unhiding Windows Taskbar..." -ForegroundColor Cyan
+Write-Host "==> [3/5] Restoring IFEO Shell Experience host overrides..." -ForegroundColor Cyan
+$ifeoBase = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"
+$backupIfeoBase = "HKCU:\Software\LeanShell\BackupIFEO"
+$hosts = @(
+    "StartMenuExperienceHost.exe",
+    "SearchHost.exe",
+    "Widgets.exe",
+    "WidgetService.exe",
+    "ShellExperienceHost.exe",
+    "CrossDeviceService.exe"
+)
+foreach ($hostExe in $hosts) {
+    $ifeoKey = Join-Path $ifeoBase $hostExe
+    $backupKey = Join-Path $backupIfeoBase $hostExe
+    $originalDebugger = $null
+    $managed = $false
+    if (Test-Path $backupKey) {
+        $props = Get-ItemProperty -Path $backupKey -ErrorAction SilentlyContinue
+        if ($props.OriginalDebugger) { $originalDebugger = $props.OriginalDebugger }
+        if ($props.ManagedByLeanShell) { $managed = $true }
+    }
+    if (Test-Path $ifeoKey) {
+        $currentDebugger = (Get-ItemProperty -Path $ifeoKey -Name "Debugger" -ErrorAction SilentlyContinue).Debugger
+        try {
+            if ($originalDebugger) {
+                Set-ItemProperty -Path $ifeoKey -Name "Debugger" -Value $originalDebugger -ErrorAction Stop
+                Write-Host "    Restored original Debugger for $hostExe." -ForegroundColor Yellow
+            } elseif ($managed -or ($currentDebugger -and $currentDebugger.Trim().ToLower() -eq "systray.exe")) {
+                Remove-ItemProperty -Path $ifeoKey -Name "Debugger" -Force -ErrorAction Stop
+                Write-Host "    Removed LeanShell IFEO Debugger for $hostExe." -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Warning "    Could not revert HKLM IFEO override for $hostExe (run as Administrator if needed): $_"
+        }
+    }
+}
+if (Test-Path $backupIfeoBase) {
+    Remove-Item -Path $backupIfeoBase -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "==> [4/5] Unhiding Windows Taskbar..." -ForegroundColor Cyan
 $definition = @"
 using System;
 using System.Runtime.InteropServices;
@@ -83,7 +123,7 @@ try {
     Write-Warning "    Could not invoke ShowWindow on taskbar: $_"
 }
 
-Write-Host "==> [4/4] Ensuring explorer.exe is running..." -ForegroundColor Cyan
+Write-Host "==> [5/5] Ensuring explorer.exe is running..." -ForegroundColor Cyan
 $explorer = Get-Process -Name "explorer" -ErrorAction SilentlyContinue
 if (-not $explorer) {
     Write-Host "    Starting explorer.exe..." -ForegroundColor Yellow

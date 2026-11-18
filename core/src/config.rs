@@ -101,25 +101,6 @@ pub enum PanelAlign {
     Left,
 }
 
-/// Rendering backend to draw the launcher and dock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Backend {
-    #[default]
-    Direct2d,
-    Slint,
-}
-
-/// Renderer subsystem inside the Slint backend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum SlintRendererConfig {
-    #[default]
-    Skia,
-    Vello,
-    Software,
-}
-
 /// Keys missing from the user's file take their value from `config-0.3.toml`,
 /// then from the default config.
 #[derive(Debug, Clone, Deserialize)]
@@ -160,10 +141,22 @@ pub struct Config {
     pub watchdog: bool,
     #[serde(default = "default_true")]
     pub claim_win_key: bool,
+    #[serde(default = "default_true")]
+    pub neuter_shell_hosts: bool,
+    #[serde(default = "default_true")]
+    pub auto_reap_explorer: bool,
+    #[serde(default = "default_true")]
+    pub claim_shell_chords: bool,
+    #[serde(default = "default_true")]
+    pub wm_enabled: bool,
     #[serde(default)]
-    pub backend: Backend,
-    #[serde(default)]
-    pub slint_renderer: SlintRendererConfig,
+    pub wm_tiling: bool,
+    #[serde(default = "default_wm_gap")]
+    pub wm_gap: u32,
+    #[serde(default = "default_true")]
+    pub wm_borders: bool,
+    #[serde(default = "default_wm_border_color")]
+    pub wm_border_color: String,
 }
 
 fn default_true() -> bool {
@@ -172,6 +165,14 @@ fn default_true() -> bool {
 
 fn default_dock_screen() -> String {
     "pointer".to_string()
+}
+
+fn default_wm_gap() -> u32 {
+    8
+}
+
+fn default_wm_border_color() -> String {
+    "#0891B2".to_string()
 }
 
 /// Returns true if `value` is empty (meaning use theme colors) or a valid `#RRGGBB` / `#RRGGBBAA` hex color.
@@ -217,22 +218,29 @@ impl Config {
         let mut config = Self::parse(&text).map_err(|e| format!("{}: {}", path.display(), e.message()))?;
         config.max_results = config.max_results.clamp(1, 20);
         config.dock_icon_size = config.dock_icon_size.clamp(24, 40);
+        config.wm_gap = config.wm_gap.min(32);
         let warning = config.drop_unusable_color();
         Ok((config, warning))
     }
 
-    /// Clears a `dock_color` that is not a color, which returns the dock to
-    /// the theme's colors, and says what was wrong with it.
+    /// Clears a `dock_color` or `wm_border_color` that is not a valid hex color.
     pub fn drop_unusable_color(&mut self) -> Option<String> {
-        if self.dock_color.trim().is_empty() || is_valid_color(&self.dock_color) {
-            return None;
+        let mut warnings = Vec::new();
+        if !self.dock_color.trim().is_empty() && !is_valid_color(&self.dock_color) {
+            warnings.push(format!(
+                "config.toml: dock_color \"{}\" must look like #1E3A8A or #1E3A8AC0. Using the theme's colors.",
+                self.dock_color
+            ));
+            self.dock_color.clear();
         }
-        let warning = format!(
-            "config.toml: dock_color \"{}\" must look like #1E3A8A or #1E3A8AC0. Using the theme's colors.",
-            self.dock_color
-        );
-        self.dock_color.clear();
-        Some(warning)
+        if !self.wm_border_color.trim().is_empty() && !is_valid_color(&self.wm_border_color) {
+            warnings.push(format!(
+                "config.toml: wm_border_color \"{}\" must look like #0891B2. Using the default border color.",
+                self.wm_border_color
+            ));
+            self.wm_border_color = default_wm_border_color();
+        }
+        (!warnings.is_empty()).then(|| warnings.join(" "))
     }
 
     /// Reads a config, taking each missing key from `config-0.3.toml` or the
@@ -322,14 +330,9 @@ mod tests {
     }
 
     #[test]
-    fn backend_and_slint_renderer_deserialize() {
+    fn legacy_renderer_keys_are_ignored() {
         let config = Config::parse("backend = \"slint\"\nslint_renderer = \"vello\"").unwrap();
-        assert_eq!(config.backend, Backend::Slint);
-        assert_eq!(config.slint_renderer, SlintRendererConfig::Vello);
-
-        let default = Config::default();
-        assert_eq!(default.backend, Backend::Direct2d);
-        assert_eq!(default.slint_renderer, SlintRendererConfig::Skia);
+        assert!(config.wm_enabled);
     }
 
     #[test]
@@ -361,5 +364,41 @@ mod tests {
         assert!(bad.drop_unusable_color().is_some());
         assert!(bad.dock_color.is_empty());
         assert!(!bad.dock_search_button);
+    }
+
+    #[test]
+    fn phase7_takeover_keys_default_true_and_deserialize() {
+        let default = Config::default();
+        assert!(default.neuter_shell_hosts);
+        assert!(default.auto_reap_explorer);
+        assert!(default.claim_shell_chords);
+
+        let config =
+            Config::parse("neuter_shell_hosts = false\nauto_reap_explorer = false\nclaim_shell_chords = false")
+                .unwrap();
+        assert!(!config.neuter_shell_hosts);
+        assert!(!config.auto_reap_explorer);
+        assert!(!config.claim_shell_chords);
+    }
+
+    #[test]
+    fn phase8_wm_keys_defaults_and_deserialize() {
+        let default = Config::default();
+        assert!(default.wm_enabled);
+        assert!(!default.wm_tiling);
+        assert_eq!(default.wm_gap, 8);
+        assert!(default.wm_borders);
+        assert_eq!(default.wm_border_color, "#0891B2");
+
+        let mut custom = Config::parse(
+            "wm_enabled = false\nwm_tiling = true\nwm_gap = 12\nwm_borders = false\nwm_border_color = 'bad-hex'",
+        )
+        .unwrap();
+        assert!(!custom.wm_enabled);
+        assert!(custom.wm_tiling);
+        assert_eq!(custom.wm_gap, 12);
+        assert!(!custom.wm_borders);
+        assert!(custom.drop_unusable_color().is_some());
+        assert_eq!(custom.wm_border_color, "#0891B2");
     }
 }

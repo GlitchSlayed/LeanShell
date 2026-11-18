@@ -376,6 +376,74 @@ impl Renderer {
         Ok((2.0 * DESKTOP_PAD + dots + DESKTOP_LABEL_GAP + label, height))
     }
 
+    /// Draws the hardware Volume/Mute Direct2D OSD pill.
+    pub fn draw_volume_osd(
+        &mut self,
+        hwnd: HWND,
+        dpi: u32,
+        palette: &Palette,
+        percent: u32,
+        muted: bool,
+    ) -> Result<()> {
+        self.paint(hwnd, dpi, palette, |target, formats| {
+            background(target, palette, 1.0);
+            let size = unsafe { target.rt.GetSize() };
+            let pct = percent.min(100);
+            let glyph_color = if muted { &palette.subtext } else { &palette.text };
+            unsafe { target.brush.SetColor(glyph_color) };
+            text(
+                &target.rt,
+                &target.brush,
+                &formats.glyph,
+                volume_glyph(pct, muted),
+                rect(8.0, 0.0, 34.0, size.height),
+            );
+
+            let bar_left = 40.0;
+            let bar_right = size.width - 52.0;
+            let bar_h = 4.0;
+            let bar_top = (size.height - bar_h) / 2.0;
+            let track_color = D2D1_COLOR_F {
+                a: 0.22,
+                ..palette.text
+            };
+            unsafe {
+                target.brush.SetColor(&track_color);
+                target.rt.FillRoundedRectangle(
+                    &rounded(rect(bar_left, bar_top, bar_right, bar_top + bar_h), bar_h / 2.0),
+                    &target.brush,
+                );
+            }
+            let fill_w = (bar_right - bar_left) * (pct as f32 / 100.0);
+            if fill_w > 0.5 {
+                let fill_color = if muted { &palette.subtext } else { &palette.accent };
+                unsafe {
+                    target.brush.SetColor(fill_color);
+                    target.rt.FillRoundedRectangle(
+                        &rounded(rect(bar_left, bar_top, bar_left + fill_w, bar_top + bar_h), bar_h / 2.0),
+                        &target.brush,
+                    );
+                }
+            }
+
+            let label = if muted { "Muted".to_string() } else { format!("{pct}%") };
+            unsafe { target.brush.SetColor(&palette.text) };
+            text(
+                &target.rt,
+                &target.brush,
+                &formats.small,
+                &label,
+                rect(size.width - 48.0, 0.0, size.width - 8.0, size.height),
+            );
+            Ok(())
+        })
+    }
+
+    /// Volume OSD pill size in DIPs.
+    pub fn measure_volume_osd(&self) -> (f32, f32) {
+        (196.0, 36.0)
+    }
+
     /// Sizes the target to the window, then draws with `f` between BeginDraw and EndDraw.
     fn paint(
         &mut self,

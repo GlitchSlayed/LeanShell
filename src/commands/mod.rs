@@ -95,6 +95,14 @@ pub enum Command {
     FocusWindow(isize),
     CloseWindow(isize),
     Power(Power),
+    /// Toggle dynamic window tiling on the active monitor.
+    WmToggleTiling,
+    /// Re-tile open windows on the active monitor.
+    WmTileNow,
+    /// Open the Direct2D Task View (`Win+Tab`) overlay.
+    WmTaskView,
+    /// Snap the previous foreground window in a direction.
+    WmSnap(leanshell_core::SnapDirection),
     /// Quits Wisp. The launcher handles it, so the worker never sees it.
     Quit,
     /// Opens Wisp's own Settings. The launcher handles it too.
@@ -110,6 +118,10 @@ impl Command {
                 | Command::FocusWindow(_)
                 | Command::WindowControl(_, _)
                 | Command::Power(_)
+                | Command::WmToggleTiling
+                | Command::WmTileNow
+                | Command::WmTaskView
+                | Command::WmSnap(_)
                 | Command::Quit
                 | Command::WispSettings
         )
@@ -243,9 +255,14 @@ fn worker(requests: Receiver<Request>, events: Sender<Event>, icon_size: i32, no
                             Command::FocusWindow(hwnd) => open_windows::focus(*hwnd),
                             Command::CloseWindow(hwnd) => open_windows::close(*hwnd),
                             Command::Power(power) => power::run(*power),
-                            Command::Quit | Command::WispSettings | Command::RadioView(_) | Command::RadioSelect(_) => {
-                                Ok(())
-                            }
+                            Command::WmToggleTiling
+                            | Command::WmTileNow
+                            | Command::WmTaskView
+                            | Command::WmSnap(_)
+                            | Command::Quit
+                            | Command::WispSettings
+                            | Command::RadioView(_)
+                            | Command::RadioSelect(_) => Ok(()),
                         }
                     };
                     if let Err(error) = result {
@@ -323,7 +340,7 @@ fn read_state() -> State {
     }
 }
 
-fn exe_icon(exe: &str, size: i32) -> Option<IconPixels> {
+pub(crate) fn exe_icon(exe: &str, size: i32) -> Option<IconPixels> {
     unsafe {
         let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(exe), None).ok()?;
         indexer::load_icon(&item, size)
@@ -363,6 +380,7 @@ pub fn search(query: &str, state: &State) -> Vec<ResultItem> {
     items.extend(volume_items(&words, state.audio.as_ref()));
     items.extend(media_items(&words, state.media.as_ref()));
     items.extend(power_items(&query));
+    items.extend(wm_items(&query));
     items.extend(wisp_settings_item(&query));
     items.extend(quit_item(&query));
     items.extend(time_items(&words));
@@ -644,6 +662,66 @@ fn power_items(query: &str) -> Vec<ResultItem> {
         .iter()
         .any(|keyword| keyword.starts_with(query));
     power_items_with_capability(query, asks_hibernate && power::can_hibernate())
+}
+
+fn wm_items(query: &str) -> Vec<ResultItem> {
+    if query.chars().count() < 3 {
+        return Vec::new();
+    }
+    use leanshell_core::SnapDirection;
+    let candidates = [
+        (
+            "Toggle window tiling",
+            "Enable or disable dynamic Master-Stack tiling (Win+T)",
+            &["tile", "tiling", "toggle tiling", "window tiling"][..],
+            Command::WmToggleTiling,
+            "Toggle",
+        ),
+        (
+            "Tile windows now",
+            "Arrange open windows on the active monitor",
+            &["retile", "arrange windows"][..],
+            Command::WmTileNow,
+            "Tile",
+        ),
+        (
+            "Task View",
+            "Show open windows, virtual desktops, and tiling controls (Win+Tab)",
+            &["task view", "taskview", "switch windows", "overview"][..],
+            Command::WmTaskView,
+            "Open",
+        ),
+        (
+            "Snap window left",
+            "Snap the active window to the left half (Win+Left)",
+            &["snap left", "left half"][..],
+            Command::WmSnap(SnapDirection::Left),
+            "Snap",
+        ),
+        (
+            "Snap window right",
+            "Snap the active window to the right half (Win+Right)",
+            &["snap right", "right half"][..],
+            Command::WmSnap(SnapDirection::Right),
+            "Snap",
+        ),
+        (
+            "Snap / maximize window",
+            "Snap or maximize the active window (Win+Up)",
+            &["snap up", "maximize"][..],
+            Command::WmSnap(SnapDirection::Up),
+            "Snap",
+        ),
+    ];
+    candidates
+        .into_iter()
+        .filter(|(_, _, keywords, _, _)| keywords.iter().any(|k| k.starts_with(query)))
+        .map(|(title, subtitle, _, cmd, verb)| {
+            row(title, subtitle, Action::Command(cmd))
+                .glyph(glyph::WINDOW)
+                .verb(verb)
+        })
+        .collect()
 }
 
 fn power_items_with_capability(query: &str, can_hibernate: bool) -> Vec<ResultItem> {

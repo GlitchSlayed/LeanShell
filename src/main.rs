@@ -38,6 +38,7 @@ mod theme;
 mod tray;
 mod tray_host;
 mod util;
+mod wm;
 
 fn main() {
     panic_log::install();

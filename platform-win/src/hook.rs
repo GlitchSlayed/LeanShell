@@ -6,7 +6,7 @@
 //! Start then opens as usual. Never swallow a physical key, including Win-down.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use windows::Win32::Foundation::{E_FAIL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -30,7 +30,11 @@ pub const WM_APP_TOGGLE: u32 = WM_APP + 9;
 /// Custom message sent to the launcher window when explicitly requested to show.
 pub const WM_APP_SHOW: u32 = WM_APP + 3;
 
-pub use leanshell_core::hook::{HookDecision, WinKeyTracker};
+/// Custom message sent to the launcher window when a claimed shell chord or volume key fires.
+/// Matches `crate::messages::WM_SHELL_CHORD` (`WM_APP + 61`).
+pub const WM_SHELL_CHORD: u32 = WM_APP + 61;
+
+pub use leanshell_core::hook::{HookDecision, ShellChord, WinKeyTracker};
 
 thread_local! {
     static TRACKER: Cell<WinKeyTracker> = const {
@@ -40,6 +44,23 @@ thread_local! {
 
 // Note: WinKeyTracker::new() works in thread_local too; keep Cell<WinKeyTracker> clean.
 static TARGET_HWND: AtomicIsize = AtomicIsize::new(0);
+static CLAIM_CHORDS: AtomicBool = AtomicBool::new(false);
+
+fn send_win_mask_pair() -> bool {
+    let key = |flags: KEYBD_EVENT_FLAGS| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(0xE8),
+                dwFlags: flags,
+                ..Default::default()
+            },
+        },
+    };
+    let inputs = [key(Default::default()), key(KEYEVENTF_KEYUP)];
+    // SAFETY: Fixed stack array of two INPUT structs for unassigned VK 0xE8 chord masking.
+    unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) == 2 }
+}
 
 unsafe extern "system" fn ll_keyboard_proc(n_code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // SAFETY: Low-level keyboard hook callback called by Windows on our dedicated thread.
@@ -52,28 +73,42 @@ unsafe extern "system" fn ll_keyboard_proc(n_code: i32, wparam: WPARAM, lparam: 
             if matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP) {
                 let is_down = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
                 let injected = event.flags.contains(LLKHF_INJECTED);
-                let tap = TRACKER.with(|state| {
+                let claim_chords = CLAIM_CHORDS.load(Ordering::Acquire);
+                let (chord, tap) = TRACKER.with(|state| {
                     let mut tracker = state.get();
-                    let matched = tracker.key(event.vkCode, is_down, injected);
+                    let chord = tracker.check_chord(event.vkCode, is_down, injected, claim_chords);
+                    let tap = tracker.key(event.vkCode, is_down, injected);
                     state.set(tracker);
-                    matched
+                    (chord, tap)
                 });
+                if let Some(chord) = chord {
+                    let target = TARGET_HWND.load(Ordering::Acquire);
+                    if chord.pass_through_key() {
+                        if target != 0 {
+                            let _ = PostMessageW(
+                                Some(HWND(target as _)),
+                                WM_SHELL_CHORD,
+                                WPARAM(chord as usize),
+                                LPARAM(0),
+                            );
+                        }
+                    } else if !chord.requires_win_mask() || send_win_mask_pair() {
+                        if target != 0 {
+                            let _ = PostMessageW(
+                                Some(HWND(target as _)),
+                                WM_SHELL_CHORD,
+                                WPARAM(chord as usize),
+                                LPARAM(0),
+                            );
+                        }
+                        return LRESULT(1);
+                    }
+                }
                 if tap {
                     // Send a fixed unassigned VK (0xE8) pair before forwarding Win-up so Windows
                     // sees an intervening chord instead of a bare Start-menu trigger.
                     // Check SendInput == 2 so UIPI blocks let the default behavior run cleanly.
-                    let key = |flags: KEYBD_EVENT_FLAGS| INPUT {
-                        r#type: INPUT_KEYBOARD,
-                        Anonymous: INPUT_0 {
-                            ki: KEYBDINPUT {
-                                wVk: VIRTUAL_KEY(0xE8),
-                                dwFlags: flags,
-                                ..Default::default()
-                            },
-                        },
-                    };
-                    let inputs = [key(Default::default()), key(KEYEVENTF_KEYUP)];
-                    if SendInput(&inputs, size_of::<INPUT>() as i32) == 2 {
+                    if send_win_mask_pair() {
                         let target = TARGET_HWND.load(Ordering::Acquire);
                         if target != 0 {
                             let _ = PostMessageW(Some(HWND(target as _)), WM_APP_TOGGLE, WPARAM(0), LPARAM(0));
@@ -115,6 +150,10 @@ pub struct WinKeyHook {
 }
 
 impl WinKeyHook {
+    pub fn set_claim_chords(enabled: bool) {
+        CLAIM_CHORDS.store(enabled, Ordering::Release);
+    }
+
     pub fn new(target_hwnd: HWND) -> Result<Self> {
         let (tx, rx) = std::sync::mpsc::channel();
         let target_raw = target_hwnd.0 as usize;

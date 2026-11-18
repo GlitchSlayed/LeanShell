@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, ERROR_FILE_NOT_FOUND, LPARAM, WPARAM},
+        Foundation::{CloseHandle, ERROR_FILE_NOT_FOUND, HWND, LPARAM, WPARAM},
         System::{Diagnostics::ToolHelp::*, Registry::*},
         UI::{Shell::ShellExecuteW, WindowsAndMessaging::*},
     },
     core::{PCWSTR, w},
 };
+
+const PERSONALIZE_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_VALUE: PCWSTR = crate::channel::RUN_VALUE;
@@ -71,21 +73,13 @@ fn launcher_path(settings_exe: &Path) -> Result<PathBuf, String> {
         .ok_or_else(|| "Cannot find the LeanShell folder.".into())
 }
 
-/// Colors the Windows title bar of this app's window to match the page.
+/// Colors the Windows title bar of `hwnd` to match the page.
 /// `background` and `text` are 0xRRGGBB.
-pub fn style_title_bar(title: &str, dark: bool, background: u32, text: u32) {
+pub fn style_hwnd_title_bar(hwnd: HWND, dark: bool, background: u32, text: u32) {
     use windows::Win32::Graphics::Dwm::*;
     let bgr = |rgb: u32| ((rgb & 0xff) << 16) | (rgb & 0xff00) | ((rgb >> 16) & 0xff);
-    let title = wide(title);
+    // SAFETY: Caller passes a valid HWND belonging to this process; DwmSetWindowAttribute ignores unsupported attributes gracefully.
     unsafe {
-        let Ok(hwnd) = FindWindowW(None, PCWSTR(title.as_ptr())) else {
-            return;
-        };
-        let mut pid = 0;
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        if pid != std::process::id() {
-            return;
-        }
         let set = |attribute: DWMWINDOWATTRIBUTE, value: u32| {
             let _ = DwmSetWindowAttribute(hwnd, attribute, (&raw const value).cast(), size_of::<u32>() as u32);
         };
@@ -94,6 +88,26 @@ pub fn style_title_bar(title: &str, dark: bool, background: u32, text: u32) {
         set(DWMWA_BORDER_COLOR, bgr(background));
         set(DWMWA_TEXT_COLOR, bgr(text));
     }
+}
+
+/// Returns whether Windows apps are configured to use dark mode.
+pub fn is_system_dark() -> bool {
+    let mut val = 0u32;
+    let mut size = size_of::<u32>() as u32;
+    // SAFETY: Reads standard HKCU Personalize\AppsUseLightTheme DWORD into stack variable.
+    let ok = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PERSONALIZE_KEY,
+            w!("AppsUseLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut val).cast()),
+            Some(&mut size),
+        )
+        .is_ok()
+    };
+    if ok { val == 0 } else { true }
 }
 
 pub fn notify_launcher() {

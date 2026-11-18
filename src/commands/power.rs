@@ -65,12 +65,12 @@ impl Power {
 
     pub fn keywords(self) -> &'static [&'static str] {
         match self {
-            Power::Lock => &["lock", "lock screen"],
-            Power::Sleep => &["sleep", "suspend"],
-            Power::Hibernate => &["hibernate", "hibernation", "hiber"],
-            Power::Restart => &["restart", "reboot"],
+            Power::Lock => &["lock", "lock screen", "power"],
+            Power::Sleep => &["sleep", "suspend", "power"],
+            Power::Hibernate => &["hibernate", "hibernation", "hiber", "power"],
+            Power::Restart => &["restart", "reboot", "power"],
             Power::ShutDown => &["shut down", "shutdown", "power off", "turn off pc"],
-            Power::SignOut => &["sign out", "log out", "log off", "logout", "logoff"],
+            Power::SignOut => &["sign out", "log out", "log off", "logout", "logoff", "power"],
             Power::EmptyRecycleBin => &["empty recycle bin", "recycle bin", "empty trash", "trash"],
         }
     }

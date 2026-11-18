@@ -906,11 +906,15 @@ pub fn restore_shell_cli() -> Result<()> {
         }
     }
 
-    // 2. Transactionally restore user Winlogon Shell override in HKCU
+    // 2. Transactionally restore user Winlogon Shell override in HKCU and IFEO host overrides
     if let Err(e) = leanshell_platform_win::unregister_exclusive_shell() {
         eprintln!("  [WARN] Failed to unregister exclusive shell: {e}");
     } else {
         println!("  [OK] Reverted HKCU Winlogon Shell override to default.");
+    }
+    match leanshell_platform_win::restore_shell_hosts() {
+        Ok(count) => println!("  [OK] Restored IFEO shell host overrides ({count} entries checked/reverted)."),
+        Err(e) => eprintln!("  [WARN] Could not restore HKLM IFEO host overrides (re-run elevated if needed): {e}"),
     }
 
     // 3. Unclip and show all taskbars across all monitors
@@ -928,12 +932,14 @@ pub fn restore_shell_cli() -> Result<()> {
     // 4. Clear auto-hide on primary taskbar
     let _ = set_state(0);
 
-    // 5. Restore monitor work areas
+    // 5. Restore monitor work areas and DWM active border colors
     if let Ok(mons) = monitors() {
         let areas: Vec<_> = mons.iter().map(|m| (m.bounds, m.work)).collect();
         let _ = restore_areas(&areas);
         println!("  [OK] Restored desktop work areas.");
     }
+    leanshell_platform_win::reset_all_window_borders();
+    println!("  [OK] Reset DWM window border overrides.");
 
     // 6. If Explorer is not running, start it
     if crate::tray_host::explorer_tray().is_none() {
@@ -988,6 +994,30 @@ pub fn print_diagnostics() {
             println!("Monitor #{}: bounds={:?} work={:?}", i, m.bounds, m.work);
         }
     }
+
+    // 4. Phase 7 Shell Host Neutering & On-Demand Explorer State
+    println!("IFEO Shell Experience Hosts:");
+    for &exe in leanshell_core::DEFAULT_NEUTERED_HOSTS {
+        println!(
+            "  {exe}: {}",
+            if leanshell_platform_win::is_host_neutered(exe) {
+                "neutered (systray.exe)"
+            } else {
+                "stock"
+            }
+        );
+    }
+    let (exp_running, exp_folders, exp_dialogs) = leanshell_platform_win::inspect_explorer_windows();
+    println!("On-Demand Explorer: running={exp_running}, folders={exp_folders}, file_dialogs={exp_dialogs}");
+
+    // 5. Phase 8 Hybrid Window Management Diagnostics
+    let (cfg, _) = crate::config::load();
+    let (hmon, _, work, dpi) = leanshell_platform_win::active_monitor_work_rect();
+    let tileable = leanshell_platform_win::list_tileable_windows_on_monitor(hmon).len();
+    println!(
+        "Hybrid WM (Phase 8): enabled={}, default_tiling={}, gap={}dp, borders={}, active_mon_dpi={}, work={:?}, tileable_windows={}",
+        cfg.wm_enabled, cfg.wm_tiling, cfg.wm_gap, cfg.wm_borders, dpi, work, tileable
+    );
     println!("================================================");
 }
 
@@ -1011,9 +1041,24 @@ pub fn dispatch_cli() -> bool {
         return true;
     }
     if args.iter().any(|a| a == "--unregister-shell") {
+        let _ = leanshell_platform_win::restore_shell_hosts();
         match leanshell_platform_win::unregister_exclusive_shell() {
             Ok(()) => println!("[SUCCESS] Reset HKCU Winlogon Shell override back to Windows Explorer."),
             Err(e) => eprintln!("Failed to unregister shell: {e}"),
+        }
+        return true;
+    }
+    if args.iter().any(|a| a == "--neuter-hosts") {
+        match leanshell_platform_win::neuter_shell_hosts(leanshell_core::DEFAULT_NEUTERED_HOSTS) {
+            Ok(n) => println!("[SUCCESS] Neutered {n} Windows Shell Experience hosts via IFEO."),
+            Err(e) => eprintln!("Failed to neuter shell hosts (run as Administrator): {e}"),
+        }
+        return true;
+    }
+    if args.iter().any(|a| a == "--restore-hosts") {
+        match leanshell_platform_win::restore_shell_hosts() {
+            Ok(n) => println!("[SUCCESS] Restored {n} IFEO shell host overrides."),
+            Err(e) => eprintln!("Failed to restore shell hosts (run as Administrator): {e}"),
         }
         return true;
     }

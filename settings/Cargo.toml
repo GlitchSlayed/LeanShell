@@ -1,6 +1,6 @@
 [package]
 name = "leanshell-settings"
-version = "0.0.12"
+version = "0.0.13"
 edition = "2024"
 description = "Settings and onboarding for LeanShell"
 license = "MIT"
@@ -13,7 +13,6 @@ nightly = []
 [dependencies]
 leanshell-core = { path = "../core" }
 leanshell-platform-win = { path = "../platform-win" }
-slint = { version = "1.18", default-features = false, features = ["compat-1-2", "std", "backend-default", "renderer-software"] }
 toml_edit = "0.23"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
@@ -21,21 +20,31 @@ serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+windows-core = "0.62"
+windows-numerics = "0.3"
 
 [build-dependencies]
-slint-build = "1.18"
 winresource = "0.1"
 
 [dependencies.windows]
 version = "0.62"
 features = [
     "Win32_Foundation",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
     "Win32_Networking_WinHttp",
     "Win32_Security",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_Threading",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ]

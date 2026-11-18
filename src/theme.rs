@@ -105,6 +105,7 @@ enum Accent {
     Blur,
 }
 
+#[derive(Clone, Copy)]
 pub struct Palette {
     pub background: D2D1_COLOR_F,
     pub text: D2D1_COLOR_F,

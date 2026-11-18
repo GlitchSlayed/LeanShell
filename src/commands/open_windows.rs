@@ -241,6 +241,58 @@ pub fn close(hwnd: isize) -> Result<(), String> {
     unsafe { PostMessageW(Some(HWND(hwnd as _)), WM_CLOSE, WPARAM(0), LPARAM(0)).map_err(|error| error.message()) }
 }
 
+/// Toggles "Show Desktop" (`Win+D`) asynchronously without requiring `explorer.exe`.
+///
+/// Minimizes all visible, non-cloaked application windows and remembers them so a
+/// second toggle restores them in z-order.
+pub fn toggle_show_desktop() {
+    thread_local! {
+        static DESKTOP_MINIMIZED: std::cell::RefCell<Vec<isize>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    let current: Vec<isize> = list()
+        .into_iter()
+        .filter_map(|w| {
+            let hwnd = HWND(w.hwnd as _);
+            // SAFETY: Querying iconic state and class name on an enumerated top-level HWND.
+            unsafe {
+                if IsIconic(hwnd).as_bool() {
+                    return None;
+                }
+                if class_is(hwnd, "Progman")
+                    || class_is(hwnd, "WorkerW")
+                    || class_is(hwnd, "Shell_TrayWnd")
+                    || class_is(hwnd, "Shell_SecondaryTrayWnd")
+                {
+                    return None;
+                }
+            }
+            Some(w.hwnd)
+        })
+        .collect();
+
+    if !current.is_empty() {
+        for &hwnd in &current {
+            // SAFETY: Requesting asynchronous minimize so hung apps never stall the shell thread.
+            unsafe {
+                let _ = ShowWindowAsync(HWND(hwnd as _), SW_MINIMIZE);
+            }
+        }
+        DESKTOP_MINIMIZED.with(|saved| *saved.borrow_mut() = current);
+    } else {
+        let saved = DESKTOP_MINIMIZED.with(|saved| std::mem::take(&mut *saved.borrow_mut()));
+        for hwnd in saved.into_iter().rev() {
+            let target = HWND(hwnd as _);
+            // SAFETY: Validating handle before restoring minimized windows in reverse z-order.
+            unsafe {
+                if IsWindow(Some(target)).as_bool() && IsIconic(target).as_bool() {
+                    let _ = ShowWindowAsync(target, SW_RESTORE);
+                }
+            }
+        }
+    }
+}
+
 /// Where a window's content runs, which is what End task would end.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Owner {

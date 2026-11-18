@@ -59,6 +59,8 @@ mod tray;
 mod tray_host;
 #[path = "../src/util.rs"]
 mod util;
+#[path = "../src/wm.rs"]
+mod wm;
 mod channel {
     use windows::core::{PCWSTR, w};
     pub const NIGHTLY: bool = true;

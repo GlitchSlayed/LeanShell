@@ -29,6 +29,7 @@ use crate::history::History;
 use crate::indexer::{AppEntry, IconPixels, IndexEvent, Indexer};
 use crate::messages::{
     WM_APP_COMMANDS, WM_APP_FILES, WM_APP_FRAME, WM_APP_INDEX, WM_APP_QUIT, WM_APP_RELOAD, WM_APP_SHOW, WM_APP_TOGGLE,
+    WM_EXPLORER_REAP_CHECK, WM_FOREGROUND_CHANGED, WM_SHELL_CHORD, WM_WM_ACTION, WM_WM_MOVESIZE,
 };
 use crate::render::{Frame, Renderer, SurfaceFrame, layout};
 use crate::search::{self, Action, Drill, FileScope, Kind, ResultItem, Searcher};
@@ -57,6 +58,9 @@ const PEEK_TIMER: usize = 3;
 const TASKBAR_TIMER: usize = 4;
 const TASKBAR_RETRY_MS: u32 = 2000;
 const TASKBAR_ATTEMPTS: u32 = 5;
+/// Debounces on-demand `explorer.exe` reaping after folder windows close.
+const EXPLORER_REAP_TIMER: usize = 5;
+const EXPLORER_REAP_MS: u32 = 1500;
 /// File results shown after apps, and for a query that starts with `?`.
 const MIXED_FILE_RESULTS: usize = 5;
 const ONLY_FILE_RESULTS: usize = 30;
@@ -139,6 +143,7 @@ pub fn run() -> Result<()> {
     // Emergency Safe Mode: If Shift is held down at logon/boot, abort shell takeover
     if leanshell_platform_win::is_safe_mode_requested() {
         eprintln!("[SAFE MODE] Shift key held at startup. Restoring Explorer and exiting.");
+        let _ = leanshell_platform_win::restore_shell_hosts();
         let _ = leanshell_platform_win::unregister_exclusive_shell();
         let _ = crate::launch::open("explorer.exe");
         return Ok(());
@@ -247,13 +252,16 @@ pub fn run() -> Result<()> {
         // Icons are drawn at 32 DIPs; extract them at the system DPI's pixel size.
         let icon_size = (32 * system_dpi as i32 + 95) / 96;
         let (commands, command_events) = Commands::spawn(hwnd, WM_APP_COMMANDS, icon_size);
+        let initial_palette = Palette::new(true, true);
+        let initial_tint = config::dock_tint(&config);
+        let wm = crate::wm::WindowManager::new(hwnd, &config, initial_palette, true, initial_tint);
         let launcher = Launcher {
             hwnd,
             config,
             config_mtime: config::modified(),
             registered_hotkey: None,
             tray_icon: small_icon,
-            palette: Palette::new(true, true),
+            palette: initial_palette,
             dark: true,
             material: None,
             renderer,
@@ -298,8 +306,11 @@ pub fn run() -> Result<()> {
             dock_space: None,
             dock: None,
             win_key_hook: None,
+            reap_hook: None,
             desktop: None,
             startup_launched: false,
+            hosts_neutered: false,
+            wm,
             morph: None,
             morphed: false,
             outline: None,
@@ -484,8 +495,11 @@ struct Launcher {
     dock_space: Option<DockSpace>,
     dock: Option<Dock>,
     win_key_hook: Option<leanshell_platform_win::hook::WinKeyHook>,
+    reap_hook: Option<leanshell_platform_win::WindowHook>,
     desktop: Option<crate::desktop::DesktopWindow>,
     startup_launched: bool,
+    hosts_neutered: bool,
+    wm: crate::wm::WindowManager,
     morph: Option<Morph>,
     morphed: bool,
     outline: Option<RECT>,
@@ -547,6 +561,10 @@ impl Launcher {
     }
 
     fn sync_win_key_hook(&mut self) {
+        let is_exclusive = leanshell_platform_win::is_session_exclusive();
+        leanshell_platform_win::hook::WinKeyHook::set_claim_chords(
+            self.config.claim_shell_chords && (is_exclusive || self.config.hide_taskbar),
+        );
         if self.config.claim_win_key && !crate::util::perf::hook_on("WISP_CAPTURE") {
             if self.win_key_hook.is_none() {
                 match leanshell_platform_win::hook::WinKeyHook::new(self.hwnd) {
@@ -559,6 +577,22 @@ impl Launcher {
         }
     }
 
+    fn sync_reap_hook(&mut self) {
+        let want_reap =
+            self.dock.is_none() && self.config.auto_reap_explorer && leanshell_platform_win::is_session_exclusive();
+        let want_wm = self.dock.is_none() && self.config.wm_enabled;
+        let want = want_reap || want_wm;
+        if want && self.reap_hook.is_none() {
+            match leanshell_platform_win::WindowHook::install(self.hwnd, WM_EXPLORER_REAP_CHECK, WM_FOREGROUND_CHANGED)
+            {
+                Ok(hook) => self.reap_hook = Some(hook),
+                Err(e) => eprintln!("Could not install window hook: {e}"),
+            }
+        } else if !want {
+            self.reap_hook = None;
+        }
+    }
+
     fn sync_exclusive_shell(&mut self) {
         if self.desktop.is_none() {
             match crate::desktop::DesktopWindow::new() {
@@ -566,7 +600,15 @@ impl Launcher {
                 Err(e) => eprintln!("Could not create desktop window: {e}"),
             }
         }
-        if !self.startup_launched && leanshell_platform_win::is_session_exclusive() {
+        let is_exclusive = leanshell_platform_win::is_session_exclusive();
+        if is_exclusive && self.config.neuter_shell_hosts && !self.hosts_neutered {
+            self.hosts_neutered = true;
+            if let Err(e) = leanshell_platform_win::neuter_shell_hosts(leanshell_core::DEFAULT_NEUTERED_HOSTS) {
+                eprintln!("Could not neuter shell experience hosts (run elevated for HKLM IFEO): {e}");
+            }
+        }
+        self.sync_reap_hook();
+        if !self.startup_launched && is_exclusive {
             self.startup_launched = true;
             crate::startup::launch_logon_startup_apps();
         }
@@ -656,6 +698,8 @@ impl Launcher {
         self.sync_win_key_hook();
         self.sync_exclusive_shell();
         self.apply_theme();
+        self.wm
+            .sync_config(&self.config, self.palette, self.dark, config::dock_tint(&self.config));
         self.register_hotkey(true);
     }
 
@@ -671,6 +715,7 @@ impl Launcher {
             || (!self.config.dock && self.config.display_mode == DisplayMode::Dock)
         {
             self.dock = None;
+            self.sync_reap_hook();
             self.sync_reserve();
             return;
         }
@@ -711,6 +756,7 @@ impl Launcher {
                 dock.show()
             }
         }
+        self.sync_reap_hook();
         self.sync_reserve();
     }
 
@@ -868,6 +914,7 @@ impl Launcher {
         }
         self.material = Some(key);
         self.palette = crate::theme::apply_tinted_backdrop(self.hwnd, dark, self.config.backdrop, self.unified(), tint);
+        self.wm.sync_config(&self.config, self.palette, dark, tint);
         self.invalidate();
     }
 
@@ -1593,6 +1640,26 @@ impl Launcher {
             Command::WispSettings => {
                 let _ = launch::settings(false);
                 self.hide();
+                return;
+            }
+            Command::WmToggleTiling => {
+                self.hide();
+                self.wm.toggle_tiling_active_monitor();
+                return;
+            }
+            Command::WmTileNow => {
+                self.hide();
+                self.wm.retile_all_enabled();
+                return;
+            }
+            Command::WmTaskView => {
+                self.hide();
+                self.wm.on_action(1, &self.icons);
+                return;
+            }
+            Command::WmSnap(dir) => {
+                self.hide();
+                self.wm.snap_active(self.previous_foreground, dir);
                 return;
             }
             Command::RadioView(wifi) => {
@@ -2523,8 +2590,81 @@ impl Launcher {
         }
     }
 
+    fn show_with_query(&mut self, query: &str) {
+        if !self.visible {
+            self.show();
+        }
+        self.leave_scope();
+        self.leave_surface();
+        self.editor.select_all();
+        self.editor.insert(query);
+        self.update_results();
+        self.restart_caret();
+    }
+
+    fn on_shell_chord(&mut self, chord: leanshell_platform_win::ShellChord) {
+        use leanshell_platform_win::ShellChord;
+        match chord {
+            ShellChord::OpenFiles => {
+                let _ = launch::open("explorer.exe");
+            }
+            ShellChord::RunPrompt => self.show_with_query("> "),
+            ShellChord::ShowDesktop => {
+                self.hide();
+                commands::open_windows::toggle_show_desktop();
+            }
+            ShellChord::OpenSettings => {
+                let _ = launch::open("ms-settings:");
+            }
+            ShellChord::QuickPowerMenu => self.show_with_query("power"),
+            ShellChord::VolumeUp | ShellChord::VolumeDown | ShellChord::VolumeMute => {
+                self.adjust_volume_osd(chord);
+            }
+            _ => {
+                self.wm.on_chord(chord, self.previous_foreground, &self.icons);
+            }
+        }
+    }
+
+    fn adjust_volume_osd(&mut self, chord: leanshell_platform_win::ShellChord) {
+        use leanshell_platform_win::ShellChord;
+        let Some((current, muted)) = commands::audio::level() else {
+            return;
+        };
+        let (next_percent, next_muted) = match chord {
+            ShellChord::VolumeUp => (current.saturating_add(2).min(100), false),
+            ShellChord::VolumeDown => {
+                let next = current.saturating_sub(2);
+                (next, next == 0)
+            }
+            ShellChord::VolumeMute => (current, !muted),
+            _ => return,
+        };
+        let result = if chord == ShellChord::VolumeMute {
+            commands::audio::set_mute(next_muted)
+        } else {
+            commands::audio::set_volume(next_percent)
+        };
+        if let Err(err) = result {
+            eprintln!("Volume chord error: {err}");
+            return;
+        }
+        if let Some(Some(audio)) = &mut self.command_state.audio {
+            audio.volume = next_percent;
+            audio.muted = next_muted;
+        }
+        if let Some(dock) = &mut self.dock {
+            dock.show_volume_osd(next_percent, next_muted);
+        }
+    }
+
     fn shutdown(&mut self) {
+        self.wm.shutdown();
+        self.reap_hook = None;
         self.dock = None;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), EXPLORER_REAP_TIMER);
+        }
         if let Err(e) = TaskbarHider::configure(&mut self.taskbar, self.hwnd, false, false) {
             eprintln!("could not restore the taskbar: {e}");
         }
@@ -2648,13 +2788,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     })
     .unwrap_or(false);
     if dock_message {
-        return with_launcher(|l| {
+        let result = with_launcher(|l| {
             l.dock
                 .as_ref()
                 .map(|d| d.dispatch(msg, wparam, lparam))
                 .unwrap_or(LRESULT(0))
         })
         .unwrap_or(LRESULT(0));
+        if msg == WM_FOREGROUND_CHANGED {
+            with_launcher(|l| l.wm.on_foreground_changed(HWND(lparam.0 as _)));
+        }
+        return result;
     }
     match msg {
         // DWM needs the frame styles for acrylic. Make the full window client area.
@@ -2679,6 +2823,53 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_APP_TOGGLE => {
             util::perf::input("hotkey_to_content");
             with_launcher(Launcher::toggle);
+        }
+        WM_SHELL_CHORD => {
+            if let Some(chord) = leanshell_platform_win::ShellChord::from_raw(wparam.0) {
+                with_launcher(|l| l.on_shell_chord(chord));
+            }
+        }
+        WM_FOREGROUND_CHANGED => {
+            with_launcher(|l| l.wm.on_foreground_changed(HWND(lparam.0 as _)));
+        }
+        WM_WM_MOVESIZE => {
+            with_launcher(|l| l.wm.on_movesize_event(wparam.0 as u32, HWND(lparam.0 as _)));
+        }
+        WM_WM_ACTION => {
+            with_launcher(|l| l.wm.on_action(wparam.0, &l.icons));
+        }
+        WM_TIMER if wparam.0 == crate::wm::WM_DRAG_TIMER => {
+            with_launcher(|l| l.wm.on_drag_tick());
+        }
+        WM_EXPLORER_REAP_CHECK => {
+            let is_destroy_or_hide = wparam.0 == 0
+                || matches!(
+                    wparam.0 as u32,
+                    windows::Win32::UI::WindowsAndMessaging::EVENT_OBJECT_DESTROY
+                        | windows::Win32::UI::WindowsAndMessaging::EVENT_OBJECT_HIDE
+                );
+            if is_destroy_or_hide {
+                let should_arm = with_launcher(|l| {
+                    l.config.auto_reap_explorer
+                        && leanshell_platform_win::is_session_exclusive()
+                        && leanshell_platform_win::is_explorer_running()
+                })
+                .unwrap_or(false);
+                if should_arm {
+                    // SAFETY: Arms/resets the debounced one-shot Explorer reaper timer on our HWND.
+                    unsafe {
+                        SetTimer(Some(hwnd), EXPLORER_REAP_TIMER, EXPLORER_REAP_MS, None);
+                    }
+                }
+            }
+            if matches!(
+                wparam.0 as u32,
+                windows::Win32::UI::WindowsAndMessaging::EVENT_OBJECT_DESTROY
+                    | windows::Win32::UI::WindowsAndMessaging::EVENT_OBJECT_SHOW
+                    | windows::Win32::UI::WindowsAndMessaging::EVENT_OBJECT_HIDE
+            ) {
+                with_launcher(|l| l.wm.retile_all_enabled());
+            }
         }
         WM_APP_SHOW => {
             with_launcher(Launcher::show);
@@ -3034,6 +3225,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let _ = KillTimer(Some(hwnd), TASKBAR_TIMER);
             }
             with_launcher(Launcher::sync_taskbar);
+        }
+        WM_TIMER if wparam.0 == EXPLORER_REAP_TIMER => {
+            // SAFETY: Stops the one-shot reaper timer before inspecting Explorer windows.
+            unsafe {
+                let _ = KillTimer(Some(hwnd), EXPLORER_REAP_TIMER);
+            }
+            with_launcher(|l| {
+                leanshell_platform_win::reap_idle_explorer(l.config.auto_reap_explorer);
+            });
         }
         WM_ENDSESSION if wparam.0 != 0 => taskbar::emergency_restore(),
         tray::WM_TRAY => match loword(lparam.0 as usize) {

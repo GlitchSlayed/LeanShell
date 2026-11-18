@@ -3,7 +3,7 @@
 #[path = "dock/artwork.rs"]
 mod artwork;
 #[path = "dock/desktops.rs"]
-mod desktops;
+pub mod desktops;
 #[path = "dock/jump_lists.rs"]
 mod jump_lists;
 #[path = "dock/logic.rs"]
@@ -51,7 +51,8 @@ use crate::commands::open_windows::{self, Window};
 use crate::config::{Backdrop, DisplayMode, PanelAlign, PanelEdge, WindowListMode};
 use crate::indexer::{AppEntry, IconPixels};
 use crate::messages::{
-    WM_ARTWORK, WM_CLOSE_FLYOUT, WM_DOCK_STATUS, WM_FOREGROUND_CHANGED, WM_REFRESH, WM_TRAY_CHANGED,
+    WM_ARTWORK, WM_CLOSE_FLYOUT, WM_DOCK_STATUS, WM_EXPLORER_REAP_CHECK, WM_FOREGROUND_CHANGED, WM_REFRESH,
+    WM_TRAY_CHANGED, WM_WM_ACTION,
 };
 pub use crate::messages::{WM_DOCK_SHOW_TASKBAR, WM_SHOW_LAUNCHER};
 use crate::theme::{Palette, Tint};
@@ -90,6 +91,9 @@ const HOVER_MS: f32 = 110.0;
 const DESKTOP_TIMER: usize = 106;
 /// Fires as each minute starts, for the clock.
 const CLOCK_TIMER: usize = 109;
+/// Hides the hardware Volume/Mute Direct2D OSD pill after a brief delay.
+const VOLUME_OSD_TIMER: usize = 110;
+const VOLUME_OSD_MS: u32 = 1400;
 /// A dock that stays visible and isn't in use checks for fullscreen apps at
 /// this rate; its clock, volume and battery update from events.
 const QUIET_POLL_MS: u32 = 500;
@@ -227,6 +231,8 @@ struct State {
     desktop_switched: Option<Instant>,
     /// The desktops the pill above the dock shows, while it shows.
     desktop_pill: Option<desktops::Desktops>,
+    /// The Volume/Mute OSD pill shown on `tip`, while visible.
+    volume_pill: Option<(u32, bool)>,
     /// The dock's left edge on screen, in physical pixels.
     left: i32,
     width: i32,
@@ -344,6 +350,7 @@ impl Dock {
             desktop_travel: 0,
             desktop_switched: None,
             desktop_pill: None,
+            volume_pill: None,
             left: 0,
             width: 0,
             height: 0,
@@ -505,11 +512,15 @@ impl Dock {
     }
 
     pub fn owns_message(msg: u32, wp: WPARAM) -> bool {
-        msg == WM_TIMER && (REFRESH_TIMER..=CLOCK_TIMER).contains(&wp.0)
+        msg == WM_TIMER && (REFRESH_TIMER..=VOLUME_OSD_TIMER).contains(&wp.0)
             || matches!(
                 msg,
                 WM_REFRESH | WM_FOREGROUND_CHANGED | WM_TRAY_CHANGED | WM_INPUT | WM_ARTWORK | WM_DOCK_STATUS
             )
+    }
+
+    pub fn show_volume_osd(&mut self, percent: u32, muted: bool) {
+        self.state.borrow_mut().show_volume_osd(percent, muted);
     }
 
     pub fn mostly_visible(&self) -> bool {
@@ -874,6 +885,7 @@ impl Drop for Dock {
             let _ = KillTimer(Some(self.hwnd), WINDOWS_TIMER);
             let _ = KillTimer(Some(self.hwnd), WINDOWS_HIDE_TIMER);
             let _ = KillTimer(Some(self.hwnd), CLOCK_TIMER);
+            let _ = KillTimer(Some(self.hwnd), VOLUME_OSD_TIMER);
             // Remove the pointer before synchronous destruction can reenter the wndproc.
             let s = self.state.borrow();
             for hwnd in [s.flyout, s.tip, s.windows, self.hwnd] {
@@ -2275,8 +2287,10 @@ impl State {
     fn hide_tip(&mut self) {
         self.tip_target = None;
         self.desktop_pill = None;
+        self.volume_pill = None;
         unsafe {
             let _ = KillTimer(Some(self.hwnd), DESKTOP_TIMER);
+            let _ = KillTimer(Some(self.hwnd), VOLUME_OSD_TIMER);
             let _ = KillTimer(Some(self.hwnd), TIP_TIMER);
             let _ = ShowWindow(self.tip, SW_HIDE);
         }
@@ -2284,7 +2298,9 @@ impl State {
 
     /// Shows the tooltip above what the pointer rests on.
     fn show_tip(&mut self) {
+        self.volume_pill = None;
         unsafe {
+            let _ = KillTimer(Some(self.hwnd), VOLUME_OSD_TIMER);
             let _ = KillTimer(Some(self.hwnd), TIP_TIMER);
         }
         let (text, anchor) = match self.tip_target {
@@ -2374,6 +2390,8 @@ impl State {
                 return;
             };
             let _ = AppendMenuW(menu, MF_STRING, 100, w!("LeanShell Settings"));
+            let _ = AppendMenuW(menu, MF_STRING, 101, w!("Task View (Win+Tab)"));
+            let _ = AppendMenuW(menu, MF_STRING, 102, w!("Toggle Window Tiling (Win+T)"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, 1, w!("Show taskbar"));
             let _ = AppendMenuW(menu, MF_STRING, 2, w!("Taskbar settings"));
@@ -2396,6 +2414,12 @@ impl State {
                     if let Err(error) = crate::launch::settings(false) {
                         eprintln!("Dock settings launch: {error}");
                     }
+                }
+                101 => {
+                    let _ = PostMessageW(Some(self.owner), WM_WM_ACTION, WPARAM(1), LPARAM(0));
+                }
+                102 => {
+                    let _ = PostMessageW(Some(self.owner), WM_WM_ACTION, WPARAM(2), LPARAM(0));
                 }
                 1 => {
                     let _ = PostMessageW(Some(self.owner), WM_DOCK_SHOW_TASKBAR, WPARAM(0), LPARAM(0));
@@ -2489,6 +2513,10 @@ impl State {
     fn show_desktops(&mut self, desktops: desktops::Desktops) {
         self.hide_windows();
         self.tip_target = None;
+        self.volume_pill = None;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), VOLUME_OSD_TIMER);
+        }
         let Some(name) = desktops.names.get(desktops.current) else {
             return;
         };
@@ -2547,6 +2575,61 @@ impl State {
             let _ = InvalidateRect(Some(self.tip), None, false);
             if !self.held {
                 SetTimer(Some(self.hwnd), DESKTOP_TIMER, DESKTOP_PILL_MS, None);
+            }
+        }
+    }
+
+    /// Shows a Direct2D Volume/Mute OSD pill on the active monitor even if the dock is hidden.
+    fn show_volume_osd(&mut self, percent: u32, muted: bool) {
+        self.update_status();
+        self.tip_target = None;
+        self.desktop_pill = None;
+        self.volume_pill = Some((percent, muted));
+        let (w_dip, h_dip) = self.tip_renderer.measure_volume_osd();
+        let scale = self.dpi as f32 / 96.0;
+        let (width, height) = ((w_dip * scale).ceil() as i32, (h_dip * scale).ceil() as i32);
+        let gap = (12.0 * scale).round() as i32;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIP_TIMER);
+            let _ = KillTimer(Some(self.hwnd), DESKTOP_TIMER);
+            let mut cursor = POINT::default();
+            let _ = GetCursorPos(&mut cursor);
+            let monitor = match self.fixed {
+                Some(fixed) => MonitorFromRect(&fixed, MONITOR_DEFAULTTONEAREST),
+                None => MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST),
+            };
+            let mut info = MONITORINFO {
+                cbSize: size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            let _ = GetMonitorInfoW(monitor, &mut info);
+            let x = info.rcMonitor.left + (info.rcMonitor.right - info.rcMonitor.left - width) / 2;
+            let dock_visible = IsWindowVisible(self.hwnd).as_bool() && (!self.autohide || self.revealed);
+            let y = if dock_visible {
+                let mut dock = RECT::default();
+                let _ = GetWindowRect(self.hwnd, &mut dock);
+                match self.effective_edge() {
+                    PanelEdge::Top => dock.bottom + gap,
+                    PanelEdge::Bottom => dock.top - gap - height,
+                    PanelEdge::Left | PanelEdge::Right => {
+                        info.rcMonitor.bottom - (48.0 * scale).round() as i32 - height
+                    }
+                }
+            } else {
+                info.rcMonitor.bottom - (48.0 * scale).round() as i32 - height
+            };
+            let _ = SetWindowPos(
+                self.tip,
+                Some(HWND_TOPMOST),
+                x,
+                y,
+                width,
+                height,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+            let _ = InvalidateRect(Some(self.tip), None, false);
+            if !self.held {
+                SetTimer(Some(self.hwnd), VOLUME_OSD_TIMER, VOLUME_OSD_MS, None);
             }
         }
     }
@@ -2926,9 +3009,14 @@ unsafe extern "system" fn window_event(
 ) {
     if event == EVENT_SYSTEM_FOREGROUND {
         EVENT_TARGET.with(|target| unsafe {
-            let hwnd = target.get();
-            if !hwnd.is_invalid() {
-                let _ = PostMessageW(Some(hwnd), WM_FOREGROUND_CHANGED, WPARAM(0), LPARAM(0));
+            let target_hwnd = target.get();
+            if !target_hwnd.is_invalid() {
+                let _ = PostMessageW(
+                    Some(target_hwnd),
+                    WM_FOREGROUND_CHANGED,
+                    WPARAM(0),
+                    LPARAM(hwnd.0 as isize),
+                );
             }
         });
         return;
@@ -2954,6 +3042,9 @@ unsafe extern "system" fn window_event(
         let hwnd = target.get();
         if !hwnd.is_invalid() {
             let _ = PostMessageW(Some(hwnd), WM_REFRESH, WPARAM(0), LPARAM(0));
+            if matches!(event, EVENT_OBJECT_DESTROY | EVENT_OBJECT_HIDE) {
+                let _ = PostMessageW(Some(hwnd), WM_EXPLORER_REAP_CHECK, WPARAM(0), LPARAM(0));
+            }
         }
     });
 }
@@ -3019,6 +3110,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
                 WM_FOREGROUND_CHANGED => {
                     let _ = InvalidateRect(Some(hwnd), None, false);
+                    if s.owner != hwnd {
+                        let _ = PostMessageW(Some(s.owner), WM_FOREGROUND_CHANGED, wp, lp);
+                    }
                     return LRESULT(0);
                 }
                 WM_TIMER if wp.0 == POLL_TIMER => {
@@ -3044,8 +3138,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
                 WM_TIMER if wp.0 == DESKTOP_TIMER => {
                     let _ = KillTimer(Some(hwnd), DESKTOP_TIMER);
-                    if s.desktop_pill.take().is_some() {
+                    if s.desktop_pill.take().is_some() && s.volume_pill.is_none() {
                         let _ = ShowWindow(s.tip, SW_HIDE);
+                    }
+                    return LRESULT(0);
+                }
+                WM_TIMER if wp.0 == VOLUME_OSD_TIMER => {
+                    let _ = KillTimer(Some(hwnd), VOLUME_OSD_TIMER);
+                    if s.volume_pill.take().is_some() && s.desktop_pill.is_none() {
+                        let _ = ShowWindow(s.tip, SW_HIDE);
+                    }
+                    return LRESULT(0);
+                }
+                WM_EXPLORER_REAP_CHECK => {
+                    if s.owner != hwnd {
+                        let _ = PostMessageW(Some(s.owner), WM_EXPLORER_REAP_CHECK, WPARAM(0), LPARAM(0));
                     }
                     return LRESULT(0);
                 }
@@ -3077,6 +3184,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     let _ = KillTimer(Some(hwnd), REFRESH_TIMER);
                     s.scheduled = false;
                     s.refresh();
+                    let _ = PostMessageW(Some(s.owner), WM_WM_ACTION, WPARAM(3), LPARAM(0));
                     return LRESULT(0);
                 }
                 WM_DPICHANGED | WM_DISPLAYCHANGE => {
@@ -3340,9 +3448,12 @@ unsafe extern "system" fn popup_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
                     tip_renderer,
                     tip_text,
                     desktop_pill,
+                    volume_pill,
                     ..
                 } = &mut *s;
-                let result = if let Some(pill) = desktop_pill.as_ref().filter(|_| tip) {
+                let result = if let Some((percent, muted)) = (*volume_pill).filter(|_| tip) {
+                    tip_renderer.draw_volume_osd(hwnd, *dpi, palette, percent, muted)
+                } else if let Some(pill) = desktop_pill.as_ref().filter(|_| tip) {
                     tip_renderer.draw_desktops(
                         hwnd,
                         *dpi,

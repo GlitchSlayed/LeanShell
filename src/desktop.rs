@@ -21,6 +21,8 @@ const IDM_EXPLORER: usize = 1002;
 const IDM_TERMINAL: usize = 1003;
 const IDM_DISPLAY: usize = 1004;
 const IDM_RESTORE: usize = 1005;
+const IDM_TASK_VIEW: usize = 1006;
+const IDM_TOGGLE_TILING: usize = 1007;
 
 struct CachedWallpaper {
     path: String,
@@ -279,6 +281,9 @@ unsafe extern "system" fn desktop_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
                 let _ = ClientToScreen(hwnd, &mut pt);
 
                 if let Ok(menu) = CreatePopupMenu() {
+                    let _ = AppendMenuW(menu, MF_STRING, IDM_TASK_VIEW, w!("Task View (Win+Tab)"));
+                    let _ = AppendMenuW(menu, MF_STRING, IDM_TOGGLE_TILING, w!("Toggle Window Tiling (Win+T)"));
+                    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
                     let _ = AppendMenuW(menu, MF_STRING, IDM_SETTINGS, w!("LeanShell Settings"));
                     let _ = AppendMenuW(menu, MF_STRING, IDM_EXPLORER, w!("File Explorer"));
                     let _ = AppendMenuW(menu, MF_STRING, IDM_TERMINAL, w!("Terminal"));
@@ -291,6 +296,19 @@ unsafe extern "system" fn desktop_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM,
                     let _ = DestroyMenu(menu);
 
                     match cmd.0 as usize {
+                        IDM_TASK_VIEW | IDM_TOGGLE_TILING => {
+                            let action = if cmd.0 as usize == IDM_TASK_VIEW { 1 } else { 2 };
+                            if let Ok(launcher) = FindWindowW(crate::channel::LAUNCHER_CLASS, None)
+                                && !launcher.is_invalid()
+                            {
+                                let _ = PostMessageW(
+                                    Some(launcher),
+                                    crate::messages::WM_WM_ACTION,
+                                    WPARAM(action),
+                                    LPARAM(0),
+                                );
+                            }
+                        }
                         IDM_SETTINGS => {
                             let _ = crate::launch::settings(false);
                         }

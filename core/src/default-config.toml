@@ -85,13 +85,32 @@ panel_align = "center"
 watchdog = true
 
 # Intercept bare Windows key press to open the launcher instead of the stock Start menu.
-# Windows chords (Win+E, Win+R, Win+D, Win+L, etc.) still pass through unchanged.
+# Windows chords (Win+L, Win+Shift+S, etc.) pass through unchanged.
 claim_win_key = true
 
-# Rendering backend: "direct2d" (native reference renderer) or "slint" (optional Slint UI toolkit backend).
-backend = "direct2d"
+# Block bloated Shell Experience hosts (StartMenuExperienceHost, SearchHost, Widgets, etc.)
+# via reversible IFEO redirection when running as the exclusive shell.
+neuter_shell_hosts = true
 
-# Slint backend renderer: "skia" (default high-performance 2D), "vello" (experimental GPU compute), or "software".
-slint_renderer = "skia"
+# Automatically terminate idle background explorer.exe once its last folder window closes
+# in exclusive shell mode.
+auto_reap_explorer = true
 
+# Handle Win+E, Win+R, Win+D, Win+I, Win+X and hardware Volume keys natively without Explorer.
+claim_shell_chords = true
+
+# Enable LeanShell Hybrid Window Management (Alt+Tab, Win+Tab, Win+Arrow, drag-to-snap, tiling, DWM borders).
+wm_enabled = true
+
+# Enable dynamic Master-Stack tiling on active monitors by default (toggle anytime via Win+T).
+wm_tiling = false
+
+# Window snap and tiling gap in DIPs (0 to 32).
+wm_gap = 8
+
+# Style the focused foreground window border via DWM (Windows 11).
+wm_borders = true
+
+# Focused window DWM border color as #RRGGBB (empty uses system default).
+wm_border_color = "#0891B2"
 

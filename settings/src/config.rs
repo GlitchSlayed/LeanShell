@@ -34,8 +34,14 @@ pub struct Config {
     pub shell_mode: String,
     pub watchdog: bool,
     pub claim_win_key: bool,
-    pub backend: String,
-    pub slint_renderer: String,
+    pub neuter_shell_hosts: bool,
+    pub auto_reap_explorer: bool,
+    pub claim_shell_chords: bool,
+    pub wm_enabled: bool,
+    pub wm_tiling: bool,
+    pub wm_gap: i64,
+    pub wm_borders: bool,
+    pub wm_border_color: String,
 }
 
 impl Default for Config {
@@ -83,10 +89,19 @@ impl Config {
         choice(&shell_mode, &["exclusive"], "shell_mode")?;
         let watchdog = boolean("watchdog").unwrap_or(true);
         let claim_win_key = boolean("claim_win_key").unwrap_or(true);
-        let backend = string("backend").unwrap_or_else(|_| "direct2d".into());
-        choice(&backend, &["direct2d", "slint"], "backend")?;
-        let slint_renderer = string("slint_renderer").unwrap_or_else(|_| "skia".into());
-        choice(&slint_renderer, &["skia", "vello", "software"], "slint_renderer")?;
+        let neuter_shell_hosts = boolean("neuter_shell_hosts").unwrap_or(true);
+        let auto_reap_explorer = boolean("auto_reap_explorer").unwrap_or(true);
+        let claim_shell_chords = boolean("claim_shell_chords").unwrap_or(true);
+        let wm_enabled = boolean("wm_enabled").unwrap_or(true);
+        let wm_tiling = boolean("wm_tiling").unwrap_or(false);
+        let wm_gap = get("wm_gap")
+            .as_integer()
+            .filter(|value| *value >= 0)
+            .ok_or("wm_gap must be a non-negative whole number of DIP.")?
+            .clamp(0, 32);
+        let wm_borders = boolean("wm_borders").unwrap_or(true);
+        let wm_border_color = string("wm_border_color").unwrap_or_else(|_| "#0891B2".into());
+        validate_color(&wm_border_color)?;
         let dock_icon_size = get("dock_icon_size")
             .as_integer()
             .filter(|value| *value >= 0)
@@ -136,8 +151,14 @@ impl Config {
             shell_mode,
             watchdog,
             claim_win_key,
-            backend,
-            slint_renderer,
+            neuter_shell_hosts,
+            auto_reap_explorer,
+            claim_shell_chords,
+            wm_enabled,
+            wm_tiling,
+            wm_gap,
+            wm_borders,
+            wm_border_color,
         })
     }
 }
@@ -321,14 +342,31 @@ fn validate_edit(key: &str, value: &Value) -> Result<(), String> {
         "claim_win_key" if value.as_bool().is_none() => {
             return Err("claim_win_key must be true or false.".into());
         }
-        "backend" if !matches!(value.as_str(), Some("direct2d" | "slint")) => {
-            return Err("backend must be direct2d or slint.".into());
+        "neuter_shell_hosts" if value.as_bool().is_none() => {
+            return Err("neuter_shell_hosts must be true or false.".into());
         }
-        "slint_renderer" if !matches!(value.as_str(), Some("skia" | "vello" | "software")) => {
-            return Err("slint_renderer must be skia, vello or software.".into());
+        "auto_reap_explorer" if value.as_bool().is_none() => {
+            return Err("auto_reap_explorer must be true or false.".into());
         }
+        "claim_shell_chords" if value.as_bool().is_none() => {
+            return Err("claim_shell_chords must be true or false.".into());
+        }
+        "wm_enabled" if value.as_bool().is_none() => {
+            return Err("wm_enabled must be true or false.".into());
+        }
+        "wm_tiling" if value.as_bool().is_none() => {
+            return Err("wm_tiling must be true or false.".into());
+        }
+        "wm_gap" if !value.as_integer().is_some_and(|gap| (0..=32).contains(&gap)) => {
+            return Err("Choose a window gap between 0 and 32 DIP.".into());
+        }
+        "wm_borders" if value.as_bool().is_none() => {
+            return Err("wm_borders must be true or false.".into());
+        }
+        "wm_border_color" => validate_color(value.as_str().ok_or("Border color must be text.")?)?,
         "window_list" | "display_mode" | "panel_edge" | "panel_align" | "shell_mode" | "watchdog" | "claim_win_key"
-        | "backend" | "slint_renderer" => {}
+        | "neuter_shell_hosts" | "auto_reap_explorer" | "claim_shell_chords" | "wm_enabled" | "wm_tiling"
+        | "wm_gap" | "wm_borders" => {}
         _ => return Err(format!("Unknown setting: {key}")),
     }
     Ok(())
@@ -365,7 +403,19 @@ mod tests {
         assert_eq!(config.shell_mode, "exclusive");
         assert!(config.watchdog);
         assert!(config.claim_win_key);
+        assert!(config.neuter_shell_hosts);
+        assert!(config.auto_reap_explorer);
+        assert!(config.claim_shell_chords);
+        assert!(config.wm_enabled);
+        assert!(!config.wm_tiling);
+        assert_eq!(config.wm_gap, 8);
+        assert!(config.wm_borders);
+        assert_eq!(config.wm_border_color, "#0891B2");
         assert_eq!(Config::from_document(&DEFAULT_CONFIG.parse().unwrap()).unwrap(), config);
+
+        // Legacy Slint renderer keys in user configs are ignored cleanly.
+        let legacy = Config::from_document(&"backend = 'slint'\nslint_renderer = 'vello'".parse().unwrap()).unwrap();
+        assert!(legacy.wm_enabled);
     }
 
     #[test]

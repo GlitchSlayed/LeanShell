@@ -26,21 +26,20 @@ LeanShell is a lightweight, high-performance replacement for the Windows 11 task
 
 ## Core Goals
 
-1. **Total `explorer.exe` Taskbar & Start Menu Replacement**
-   - **Never launch the defaults:** Beyond hiding running taskbars in companion mode, LeanShell's primary goal is exclusive shell replacement (`HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\Shell`).
-   - The default Windows taskbar (`explorer.exe`) and Start Menu (`StartMenuExperienceHost.exe`) never attempt to launch on logon.
-   - Explorer is preserved strictly on-demand as a file manager, freeing hundreds of megabytes of idle memory and background threads.
-   - Built-in launcher claims the Windows key to replace Start with instantaneous app launching, file search, and system commands.
+1. **Total `explorer.exe` Taskbar, Start & ExperienceHost Takeover**
+   - **Never launch the defaults:** LeanShell's primary architecture is exclusive shell replacement (`HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\Shell`).
+   - Background shell bloat (`StartMenuExperienceHost.exe`, `SearchHost.exe`, `Widgets.exe`, `WidgetService.exe`, `ShellExperienceHost.exe`, `CrossDeviceService.exe`) is blocked via reversible IFEO redirection (`neuter_shell_hosts = true`).
+   - `explorer.exe` runs strictly on-demand as a file browser (`Win+E`, folder paths) and is automatically reaped once its last folder window and file-operation dialog close (`auto_reap_explorer = true`), freeing hundreds of megabytes of idle RAM and background wakeups.
+   - Built-in launcher & hook handle bare <kbd>Win</kbd> plus essential shell chords (<kbd>Win</kbd>+<kbd>E</kbd>, <kbd>Win</kbd>+<kbd>R</kbd>, <kbd>Win</kbd>+<kbd>D</kbd>, <kbd>Win</kbd>+<kbd>I</kbd>, <kbd>Win</kbd>+<kbd>X</kbd>) and native Volume OSD without Explorer.
 
 2. **Both Taskbar Mode & Dock Mode**
-   - **Taskbar Mode (AppBar Panel):** A persistent, full-width docked panel (bottom, top, left, or right) that registers as a native Windows AppBar (`ABM_NEW`, `ABM_SETPOS`). Maximized application windows automatically respect the panel's work area without overlap.
+   - **Taskbar Mode (AppBar Panel):** A persistent, full-width docked panel (bottom, top, left, or right) that manages monitor work areas (`AppBar` / `SPI_SETWORKAREA`) so maximized windows never overlap it.
    - **Dock Mode:** A floating, auto-hiding dock that slides up when your cursor touches the display edge and recedes when not in use.
    - **Unified Morphing:** In either mode, triggering the hotkey (<kbd>Alt</kbd>+<kbd>Space</kbd> or <kbd>Win</kbd>) smoothly expands the bar/dock directly into the launcher.
 
-3. **Multi-Backend Architecture with Slint Option**
-   - **Decoupled Core:** Application models, grammar parsing, app indexing, and state logic live in a pure Rust `core` crate with zero Win32 or UI dependencies.
-   - **Direct2D (`ui-d2d` - Default & Reference):** Ultra-lean software renderer prioritizing minimal memory footprint (~20 MB) and true ~0% idle CPU and GPU use.
-   - **Slint (`ui-slint` - Optional Feature):** Modern declarative UI backend supporting Skia (default) and Vello (experimental GPU) rendering pipelines for flexible styling and animations.
+3. **100% Native Win32 + Direct2D Architecture**
+   - **Decoupled Core & Platform Layer:** Pure models, search grammar, config, host/reaper rules, and hook state machines live in `core`; Win32 shell/IFEO/hook/AppBar integration lives in `platform-win`.
+   - **Zero External UI Toolkits (`ui-d2d` & Native D2D Surfaces):** Direct2D + DirectWrite + DWM power every surface across the entire suite—launcher, dock/panel, Volume OSD, `Alt+Tab`/`Win+Tab` switchers, snap overlay, and `leanshell-settings` (~20 MB idle RAM, ~0% idle CPU/GPU).
 
 4. **~0% Idle Resource Footprint**
    - Native Win32 message-driven architecture without runtimes, web views (Electron/CEF), or polling timers. If nothing is happening, LeanShell sleeps.
@@ -90,11 +89,24 @@ Type to search, then press <kbd>Enter</kbd>.
 | `play` · `pause` · `next` | Control active media playback |
 | `w code` | Switch to an active window by title |
 | `lock` · `sleep` · `restart` · `shut down` | System power actions |
+| `tile` · `snap left` · `task view` | Toggle window tiling, snap active window, or open Task View |
 | `time tokyo` · `date` | Copy current time or date |
 | `dark mode` · `display` · … | Open corresponding Windows Settings page |
 | `now` · `sound` | Open live system status and audio panels |
 | `quit` | Exit LeanShell and restore Explorer taskbar |
 | Any search query | Search the web |
+
+### Hybrid Window Management
+
+First-class **Mouse + Keyboard** window management without `explorer.exe`:
+
+| Control | Action |
+| --- | --- |
+| <kbd>Alt</kbd>+<kbd>Tab</kbd> / <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | Direct2D window switcher (click, scroll, or release <kbd>Alt</kbd> to switch; `[×]` or middle-click to close) |
+| <kbd>Win</kbd>+<kbd>Tab</kbd> (or Dock / Desktop menu) | Task View with virtual desktop switcher pills, window cards, and clickable **Tiling: On/Off** toggle |
+| <kbd>Win</kbd>+<kbd>Left</kbd> / <kbd>Right</kbd> / <kbd>Up</kbd> / <kbd>Down</kbd> | Keyboard snap state machine (halves, quadrants, maximize, restore, minimize) |
+| Drag window to edge or corner | Direct2D snap preview overlay with gap-compensated placement |
+| <kbd>Win</kbd>+<kbd>T</kbd> (or Task View / menu) | Toggle dynamic Master-Stack tiling per monitor (drag windows to swap slots, drag border to resize split) |
 
 #### Drag and Drop
 
@@ -114,9 +126,8 @@ LeanShell is structured into modular crates:
 core/          app index, search grammar, calculator, config, window/desktop/tray models (no Win32, no UI)
 platform-win/  HWND, AppBar, blur, hotkeys and hooks, tray host, shell notifications
 render/        Renderer trait and frame description types
-ui-d2d/        Direct2D renderer (default, reference software implementation)
-ui-slint/      Slint renderer (optional feature backend)
-settings/      Settings app (leanshell-settings)
+ui-d2d/        Direct2D renderer (sole UI layer across all surfaces)
+settings/      Native Win32 + Direct2D settings app (`leanshell-settings`)
 bench/         Benchmarks, baselines, and performance methodology
 scripts/       install-nightly, restore-shell, measurement scripts
 docs/          VM testing instructions and internal Win32 API documentation
@@ -143,13 +154,15 @@ LeanShell enforces strict performance ceilings tracked in [`bench/BASELINE.md`](
 
 ## Safety & Recovery
 
-Because LeanShell interacts with shell hooks and hides the system taskbar:
-- Shell registration is strictly **per-user** (`HKCU`). LeanShell never touches `HKLM`.
-- Any crash or exit automatically triggers taskbar restoration (via watchdog supervisor).
+Because LeanShell performs deep shell takeover (Winlogon registration, input hooks, IFEO ExperienceHost suppression, and Explorer auto-reaping):
+- Every system mutation is **transactionally backed up** (`HKCU\Software\LeanShell\BackupShell`, `HKCU\Software\LeanShell\BackupIFEO`) and cleanly reversed by `--restore-shell` and `scripts\restore-shell.ps1`.
+- Holding **Shift** during logon triggers Safe Mode fallback, automatically reverting the Winlogon override and launching `explorer.exe`.
+- Any crash or exit automatically triggers restoration via the watchdog supervisor.
 - **CLI Flag Escape Hatch**:
   ```powershell
   leanshell.exe --restore-shell
   ```
+  (Also available: `--neuter-hosts`, `--restore-hosts`, `--diagnose`)
 - **Emergency Key Chord**: Press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Esc</kbd> at any time to immediately restore the taskbar and cleanly exit LeanShell.
 - **Manual PowerShell Recovery Script**:
   ```powershell

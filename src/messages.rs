@@ -51,6 +51,14 @@ pub const WM_CHECK: u32 = WM_APP + 51;
 pub const WM_SET_HEIGHT: u32 = WM_APP + 52;
 #[allow(dead_code)]
 pub const WM_OUTRANK: u32 = WM_APP + 60;
+/// A claimed Win+chord or hardware volume key event from `WH_KEYBOARD_LL`.
+pub const WM_SHELL_CHORD: u32 = WM_APP + 61;
+/// Window lifecycle notification to schedule an idle `explorer.exe` reap check.
+pub const WM_EXPLORER_REAP_CHECK: u32 = WM_APP + 62;
+/// External window move/size lifecycle event (`EVENT_SYSTEM_MOVESIZESTART`/`END`).
+pub const WM_WM_MOVESIZE: u32 = WM_APP + 63;
+/// Window management action request (`WPARAM`: 1 = Task View, 2 = Toggle Tiling, 3 = Retile).
+pub const WM_WM_ACTION: u32 = WM_APP + 64;
 
 #[cfg(test)]
 mod tests {
@@ -86,6 +94,10 @@ mod tests {
             WM_CHECK,
             WM_SET_HEIGHT,
             WM_OUTRANK,
+            WM_SHELL_CHORD,
+            WM_EXPLORER_REAP_CHECK,
+            WM_WM_MOVESIZE,
+            WM_WM_ACTION,
         ];
         let mut sorted = all.to_vec();
         sorted.sort_unstable();

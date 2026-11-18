@@ -1,7 +1,7 @@
 //! Core rendering trait and frame description types for LeanShell.
 //!
-//! Provides backend-agnostic layout geometry, color palettes, and frame description
-//! structures consumed by Direct2D (`ui-d2d`) and Slint (`ui-slint`) backends.
+//! Provides layout geometry, color palettes, and frame description
+//! structures consumed by the native Direct2D (`ui-d2d`) renderer.
 
 pub mod color;
 pub mod frame;
@@ -11,7 +11,7 @@ pub use color::{BRAND, Color, Palette};
 pub use frame::{Frame, SurfaceFrame, SurfaceWidgetDescription};
 pub use layout::Rect;
 
-/// Abstraction for rendering backends (Direct2D, Slint, etc.).
+/// Abstraction for native Direct2D frame rendering.
 pub trait Renderer {
     type Error: std::fmt::Debug;
 

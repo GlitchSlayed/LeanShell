@@ -2,6 +2,25 @@
 
 User-facing changes in each release. Each release on GitHub lists these notes and its pull requests.
 
+## 0.0.13 - 2026-11-17
+
+### Hybrid Window Manager, Shell Host Neutering & 100% Native Direct2D
+
+- **100% Native Win32 + Direct2D Consolidation (`settings/`, Slint Removed)**:
+  - Removed `ui-slint/` and all `slint` / `slint-build` / Skia / Vello dependencies across the entire workspace, shrinking dependencies and eliminating third-party UI toolkit overhead.
+  - Rewrote `leanshell-settings.exe` (`settings/src/ui.rs`) in pure native Win32 + Direct2D + DirectWrite with ClearType text, sidebar navigation (`General`, `Dock & Panel`, `Window Manager`, `Appearance`, `Search & Files`, `About & Updates`), `--welcome` 3-step onboarding, interactive shortcut capture, inline hex color editing, and async GitHub release updates.
+  - Legacy `backend` / `slint_renderer` keys in older user `config.toml` files are ignored cleanly without parse errors.
+- **Reversible Shell Experience Host Neutering & On-Demand Explorer Auto-Reaper (Phase 7)**:
+  - Added `core/src/hosts.rs` and `platform-win/src/hosts.rs` to block bloated Windows Shell Experience hosts (`StartMenuExperienceHost.exe`, `SearchHost.exe`, `Widgets.exe`, `WidgetService.exe`, `ShellExperienceHost.exe`, `CrossDeviceService.exe`) via reversible `HKLM` IFEO redirection (`Debugger = "systray.exe"`) backed up under `HKCU\Software\LeanShell\BackupIFEO`, with `--neuter-hosts` / `--restore-hosts` CLI flags and full rollback in `--restore-shell` and `scripts/restore-shell.ps1`.
+  - Added `core/src/reaper.rs` and `platform-win/src/reaper.rs` so `explorer.exe` runs strictly on demand for file browsing and automatically terminates once its last folder window (`CabinetWClass` / `ExploreWClass`) and file-operation dialog close (`auto_reap_explorer = true`).
+  - Added native Windows shell chord handling (`Win+E`, `Win+R`, `Win+D` show-desktop toggle, `Win+I`, `Win+X` quick power surface) and hardware Volume/Mute key capture with a Direct2D pill Volume OSD overlay (`claim_shell_chords = true`).
+- **Hybrid Window Management Suite (Phase 8)**:
+  - Added native Direct2D `Alt+Tab` window switcher and `Win+Tab` Task View (`src/wm.rs`, `core/src/wm.rs`) supporting keyboard cycling, mouse hover/click switching, clickable `[×]` close buttons, middle-click close, virtual desktop pills, and a clickable **Tiling: On/Off** header control.
+  - Added `Win+Arrow` snap state machine (halves, quadrants, maximize, restore, minimize), mouse drag-to-edge/corner snap preview overlay (`LeanShell.SnapOverlay`), per-monitor Master-Stack dynamic tiling (`Win+T`, drag-to-swap slots, border drag resize), and DWM invisible frame compensation (`DWMWA_EXTENDED_FRAME_BOUNDS`).
+  - Added configurable DWM active foreground window accent borders (`wm_enabled`, `wm_tiling`, `wm_gap`, `wm_borders`, `wm_border_color`) with clean border restoration on shutdown and `--restore-shell`.
+- **Build & Binary Optimization**:
+  - Updated release and workspace profiles (`Cargo.toml`) to minimize release binary sizes and speed up incremental builds across the workspace.
+
 ## 0.0.12 - 2026-11-17
 
 ### Audit, Bugfixes & Performance Optimizations

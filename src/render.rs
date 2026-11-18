@@ -1210,7 +1210,7 @@ unsafe fn draw_surface(
 }
 
 /// Caches Direct2D bitmaps per render target; a new target needs new bitmaps.
-unsafe fn bitmap(
+pub(crate) unsafe fn bitmap(
     cache: &mut HashMap<String, ID2D1Bitmap>,
     rt: &ID2D1RenderTarget,
     key: &str,
