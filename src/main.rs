@@ -6,6 +6,7 @@ mod calc;
 mod channel;
 mod commands;
 mod config;
+#[cfg(test)]
 #[allow(dead_code)]
 mod config_write;
 #[allow(dead_code)]

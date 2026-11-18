@@ -13,7 +13,7 @@ nightly = []
 [dependencies]
 leanshell-core = { path = "../core" }
 leanshell-platform-win = { path = "../platform-win" }
-slint = "1.18"
+slint = { version = "1.18", default-features = false, features = ["compat-1-2", "std", "backend-default", "renderer-software"] }
 toml_edit = "0.23"
 serde = { version = "1", features = ["derive"] }
 toml = "1"

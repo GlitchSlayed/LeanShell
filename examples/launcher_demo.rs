@@ -7,8 +7,6 @@ mod calc;
 mod commands;
 #[path = "../src/config.rs"]
 mod config;
-#[path = "../src/config_write.rs"]
-mod config_write;
 #[path = "../src/deferred.rs"]
 mod deferred;
 #[path = "../src/desktop.rs"]

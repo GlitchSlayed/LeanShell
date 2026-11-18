@@ -37,11 +37,13 @@ leanshell-ui-slint = { path = "ui-slint", optional = true }
 nucleo-matcher = "0.3"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
-toml_edit = "0.23"
-tempfile = "3"
 windows-core = "0.62"
 windows-collections = "0.3"
 windows-numerics = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+toml_edit = "0.23"
 
 [build-dependencies]
 winresource = "0.1"
@@ -101,13 +103,23 @@ features = [
     "Win32_UI_WindowsAndMessaging",
 ]
 
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
-codegen-units = 16
+codegen-units = 1
 panic = "abort"
 strip = true
 
 # Keep the launcher on the release profile above.
 [profile.release.package]
 leanshell-settings = { opt-level = "z" }
+slint = { opt-level = "z" }
+i-slint-core = { opt-level = "z" }
+i-slint-backend-winit = { opt-level = "z" }
+i-slint-backend-selector = { opt-level = "z" }
+i-slint-renderer-software = { opt-level = "z" }
+toml_edit = { opt-level = "z" }
+zip = { opt-level = "z" }
