@@ -140,9 +140,15 @@ foreach ($pair in @(
 }
 
 if ($SelfSign -and -not $CertPfx) {
-    $cert = New-SelfSignedCertificate -Type Custom -Subject $Publisher -KeyUsage DigitalSignature `
-        -FriendlyName 'LeanShell Dev MSIX Signing' -CertStoreLocation 'Cert:\CurrentUser\My' `
-        -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
+    $certParams = @{
+        Type              = 'Custom'
+        Subject           = $Publisher
+        KeyUsage          = 'DigitalSignature'
+        FriendlyName      = 'LeanShell Dev MSIX Signing'
+        CertStoreLocation = 'Cert:\CurrentUser\My'
+        TextExtension     = @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
+    }
+    $cert = New-SelfSignedCertificate @certParams
     $CertPassword = 'leanshell-dev-msix'
     $secure = ConvertTo-SecureString -String $CertPassword -Force -AsPlainText
     $CertPfx = Join-Path $outRoot 'leanshell-dev.pfx'
@@ -150,22 +156,18 @@ if ($SelfSign -and -not $CertPfx) {
     Write-Output "Generated local self-signed dev certificate at $CertPfx (install to TrustedPeople / Root in VM)."
 }
 
-$manifest = (Get-Content (Join-Path $PSScriptRoot 'AppxManifest.xml.template') -Raw) `
-    .Replace('@VERSION@', $version) `
-    .Replace('@MSIX_VERSION@', $msixVersion) `
-    .Replace('@PUBLISHER@', $Publisher)
+$manifest = Get-Content (Join-Path $PSScriptRoot 'AppxManifest.xml.template') -Raw
+$manifest = $manifest.Replace('@VERSION@', $version).Replace('@MSIX_VERSION@', $msixVersion).Replace('@PUBLISHER@', $Publisher)
 Set-Content -Encoding utf8 (Join-Path $stage 'AppxManifest.xml') $manifest
 
-$appInstaller = (Get-Content (Join-Path $PSScriptRoot 'LeanShell.appinstaller.template') -Raw) `
-    .Replace('@VERSION@', $version) `
-    .Replace('@MSIX_VERSION@', $msixVersion) `
-    .Replace('@PUBLISHER@', $Publisher)
+$appInstaller = Get-Content (Join-Path $PSScriptRoot 'LeanShell.appinstaller.template') -Raw
+$appInstaller = $appInstaller.Replace('@VERSION@', $version).Replace('@MSIX_VERSION@', $msixVersion).Replace('@PUBLISHER@', $Publisher)
 $appInstallerPath = Join-Path $outRoot 'LeanShell.appinstaller'
 Set-Content -Encoding utf8 $appInstallerPath $appInstaller
 
 $sdkBin = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match '^\d+\.' } |
-    Sort-Object Name -Descending |
+    Where-Object { $_.Name -match '^\d+\.' -and (Test-Path (Join-Path $_.FullName 'x64\makeappx.exe')) } |
+    Sort-Object { [version]$_.Name } -Descending |
     Select-Object -First 1 -ExpandProperty FullName
 $makeAppx = if ($sdkBin) { Join-Path $sdkBin 'x64\makeappx.exe' } else { 'makeappx.exe' }
 $signTool = if ($sdkBin) { Join-Path $sdkBin 'x64\signtool.exe' } else { 'signtool.exe' }
